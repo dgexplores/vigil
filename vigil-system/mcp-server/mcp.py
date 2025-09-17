@@ -18,19 +18,6 @@ import jwt
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
 
-try:
-    from mcp.server.fastmcp import FastMCP
-    from mcp.types import (
-        TextContent,
-        Tool,
-        CallToolRequest,
-        CallToolResult,
-    )
-except ImportError:
-    # Fallback for older mcp library versions
-    from mcp.server import Server as FastMCP
-    from mcp.types import Tool, TextContent, CallToolRequest, CallToolResult
-
 # Configure logging
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -159,12 +146,12 @@ class BankAPIClient:
 auth_manager = AuthManager()
 bank_client = BankAPIClient(auth_manager)
 
-# Create MCP server
-mcp = FastMCP("Vigil MCP Server")
+# Create FastAPI server
+app = FastAPI(title="Vigil MCP Server")
 
 
-@mcp.tool()
-async def get_transactions(account_id: str) -> str:
+@app.post("/tools/get-transactions")
+async def get_transactions(account_id: str) -> Dict[str, Any]:
     """Retrieve transaction history for a specific account.
     
     Args:
@@ -176,122 +163,98 @@ async def get_transactions(account_id: str) -> str:
     try:
         logger.info(f"Fetching transactions for account: {account_id}")
         result = await bank_client.get_transactions(account_id)
-        return json.dumps(result, indent=2)
+        return result
     except Exception as e:
         error_msg = f"Failed to get transactions for account {account_id}: {str(e)}"
         logger.error(error_msg)
-        return json.dumps({"error": error_msg})
+        return {"error": error_msg}
 
 
-@mcp.tool()
-async def submit_transaction(
-    from_account: str,
-    to_account: str,
-    amount: int,
+class TransactionRequest(BaseModel):
+    from_account: str
+    to_account: str
+    amount: int
     routing_number: str
-) -> str:
-    """Submit a new transaction to the ledger.
-    
-    Args:
-        from_account: Source account number
-        to_account: Destination account number  
-        amount: Transaction amount in cents
-        routing_number: Bank routing number
-        
-    Returns:
-        JSON string containing transaction result
-    """
+
+@app.post("/tools/submit-transaction")
+async def submit_transaction(request: TransactionRequest) -> Dict[str, Any]:
+    """Submit a new transaction to the ledger."""
     try:
         transaction_data = {
-            "fromAccount": from_account,
-            "toAccount": to_account,
-            "amount": amount,
-            "routingNumber": routing_number
+            "fromAccount": request.from_account,
+            "toAccount": request.to_account,
+            "amount": request.amount,
+            "routingNumber": request.routing_number
         }
         
         logger.info(f"Submitting transaction: {transaction_data}")
         result = await bank_client.submit_transaction(transaction_data)
-        return json.dumps(result, indent=2)
+        return result
     except Exception as e:
         error_msg = f"Failed to submit transaction: {str(e)}"
         logger.error(error_msg)
-        return json.dumps({"error": error_msg})
+        return {"error": error_msg}
 
 
-@mcp.tool()
-async def get_user_details(user_id: str) -> str:
-    """Retrieve detailed information about a specific user.
-    
-    Args:
-        user_id: The unique identifier for the user
-        
-    Returns:
-        JSON string containing user details
-    """
+@app.get("/tools/get-user-details/{user_id}")
+async def get_user_details(user_id: str) -> Dict[str, Any]:
+    """Retrieve detailed information about a specific user."""
     try:
         logger.info(f"Fetching user details for: {user_id}")
         result = await bank_client.get_user_details(user_id)
-        return json.dumps(result, indent=2)
+        return result
     except Exception as e:
         error_msg = f"Failed to get user details for {user_id}: {str(e)}"
         logger.error(error_msg)
-        return json.dumps({"error": error_msg})
+        return {"error": error_msg}
 
 
-@mcp.tool()
-async def lock_account(user_id: str, reason: str) -> str:
-    """Lock a user account to prevent further transactions.
-    
-    Args:
-        user_id: The unique identifier for the user
-        reason: Reason for locking the account (e.g., 'Suspected fraud')
-        
-    Returns:
-        JSON string containing lock operation result
-    """
+class LockAccountRequest(BaseModel):
+    user_id: str
+    reason: str
+
+@app.post("/tools/lock-account")
+async def lock_account(request: LockAccountRequest) -> Dict[str, Any]:
+    """Lock a user account to prevent further transactions."""
     try:
-        logger.info(f"Locking account for user {user_id}, reason: {reason}")
-        result = await bank_client.lock_account(user_id, reason)
-        return json.dumps(result, indent=2)
+        logger.info(f"Locking account for user {request.user_id}, reason: {request.reason}")
+        result = await bank_client.lock_account(request.user_id, request.reason)
+        return result
     except Exception as e:
-        error_msg = f"Failed to lock account for user {user_id}: {str(e)}"
+        error_msg = f"Failed to lock account for user {request.user_id}: {str(e)}"
         logger.error(error_msg)
-        return json.dumps({"error": error_msg})
+        return {"error": error_msg}
 
 
-@mcp.tool()
-async def login(username: str, password: str) -> str:
-    """Authenticate a user and retrieve their JWT token.
-    
-    Args:
-        username: User's username
-        password: User's password
-        
-    Returns:
-        JSON string containing authentication result
-    """
+class LoginRequest(BaseModel):
+    username: str
+    password: str
+
+@app.post("/tools/login")
+async def login(request: LoginRequest) -> Dict[str, Any]:
+    """Authenticate a user and retrieve their JWT token."""
     try:
-        logger.info(f"Authenticating user: {username}")
-        result = await bank_client.login(username, password)
-        return json.dumps(result, indent=2)
+        logger.info(f"Authenticating user: {request.username}")
+        result = await bank_client.login(request.username, request.password)
+        return result
     except Exception as e:
-        error_msg = f"Failed to authenticate user {username}: {str(e)}"
+        error_msg = f"Failed to authenticate user {request.username}: {str(e)}"
         logger.error(error_msg)
-        return json.dumps({"error": error_msg})
+        return {"error": error_msg}
 
 
 # Health check endpoint
-@mcp.get("/health")
+@app.get("/health")
 async def health_check():
     """Health check endpoint for Kubernetes probes."""
     return {"status": "healthy", "timestamp": datetime.utcnow().isoformat()}
 
 
 # Cleanup handler
-@mcp.on_event("shutdown")
+@app.on_event("shutdown")
 async def shutdown_event():
     """Clean up resources on server shutdown."""
-    logger.info("Shutting down MCP server...")
+    logger.info("Shutting down server...")
     await auth_manager.close()
     await bank_client.close()
 
@@ -308,7 +271,7 @@ if __name__ == "__main__":
     logger.info(f"Bank of Anthos base URL: {BANK_BASE_URL}")
     
     uvicorn.run(
-        "mcp:mcp",
+        "mcp:app",
         host=host,
         port=port,
         log_level=log_level,
