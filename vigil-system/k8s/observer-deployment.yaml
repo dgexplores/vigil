@@ -1,0 +1,98 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: vigil-observer
+  namespace: vigil-system
+  labels:
+    app: vigil-observer
+    component: monitoring
+    tier: data-collection
+spec:
+  replicas: 1  # Single observer to avoid duplicate monitoring
+  selector:
+    matchLabels:
+      app: vigil-observer
+  template:
+    metadata:
+      labels:
+        app: vigil-observer
+        component: monitoring
+        tier: data-collection
+    spec:
+      containers:
+      - name: observer-agent
+        image: vigil/observer-agent:latest
+        ports:
+        - containerPort: 8000
+          name: a2a-port
+        env:
+        - name: MCP_SERVER_PATH
+          value: "/app/vigil_mcp_lowlevel.py"
+        - name: OBSERVER_PORT
+          value: "8000"
+        - name: ANALYST_AGENT_URL
+          value: "http://vigil-analyst:8001"
+        - name: POLLING_INTERVAL
+          valueFrom:
+            configMapKeyRef:
+              name: vigil-config
+              key: polling_interval
+        - name: BATCH_SIZE
+          valueFrom:
+            configMapKeyRef:
+              name: vigil-config
+              key: batch_size
+        # Bank of Anthos service endpoints
+        - name: LEDGER_WRITER_URL
+          value: "http://ledgerwriter.bank-of-anthos:8080"
+        - name: TRANSACTION_HISTORY_URL
+          value: "http://transactionhistory.bank-of-anthos:8080"
+        - name: BALANCE_READER_URL
+          value: "http://balancereader.bank-of-anthos:8080"
+        - name: CONTACTS_URL
+          value: "http://contacts.bank-of-anthos:8080"
+        - name: USER_SERVICE_URL
+          value: "http://userservice.bank-of-anthos:8080"
+        resources:
+          requests:
+            memory: "256Mi"
+            cpu: "100m"
+          limits:
+            memory: "512Mi"
+            cpu: "250m"
+        livenessProbe:
+          httpGet:
+            path: /health
+            port: 8000
+          initialDelaySeconds: 30
+          periodSeconds: 30
+        readinessProbe:
+          httpGet:
+            path: /ready
+            port: 8000
+          initialDelaySeconds: 15
+          periodSeconds: 10
+        volumeMounts:
+        - name: logs-volume
+          mountPath: /app/logs
+      volumes:
+      - name: logs-volume
+        emptyDir: {}
+      restartPolicy: Always
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: vigil-observer
+  namespace: vigil-system
+  labels:
+    app: vigil-observer
+spec:
+  selector:
+    app: vigil-observer
+  ports:
+  - name: a2a-port
+    port: 8000
+    targetPort: 8000
+    protocol: TCP
+  type: ClusterIP

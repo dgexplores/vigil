@@ -1,0 +1,89 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: vigil-actuator
+  namespace: vigil-system
+  labels:
+    app: vigil-actuator
+    component: action-executor
+    tier: protective-actions
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: vigil-actuator
+  template:
+    metadata:
+      labels:
+        app: vigil-actuator
+        component: action-executor
+        tier: protective-actions
+    spec:
+      containers:
+      - name: actuator-agent
+        image: vigil/actuator-agent:latest
+        ports:
+        - containerPort: 8002
+          name: a2a-port
+        env:
+        - name: MCP_SERVER_PATH
+          value: "/app/vigil_mcp_lowlevel.py"
+        - name: ACTUATOR_PORT
+          value: "8002"
+        - name: AUTO_EXECUTE_ACTIONS
+          valueFrom:
+            configMapKeyRef:
+              name: vigil-config
+              key: auto_execute_actions
+        resources:
+          requests:
+            memory: "256Mi"
+            cpu: "100m"
+          limits:
+            memory: "512Mi"
+            cpu: "250m"
+        livenessProbe:
+          httpGet:
+            path: /health
+            port: 8002
+          initialDelaySeconds: 30
+          periodSeconds: 30
+        readinessProbe:
+          httpGet:
+            path: /ready
+            port: 8002
+          initialDelaySeconds: 15
+          periodSeconds: 10
+        volumeMounts:
+        - name: logs-volume
+          mountPath: /app/logs
+        # Security context for protective actions
+        securityContext:
+          runAsNonRoot: true
+          runAsUser: 1001
+          allowPrivilegeEscalation: false
+          readOnlyRootFilesystem: true
+          capabilities:
+            drop:
+            - ALL
+      volumes:
+      - name: logs-volume
+        emptyDir: {}
+      restartPolicy: Always
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: vigil-actuator
+  namespace: vigil-system
+  labels:
+    app: vigil-actuator
+spec:
+  selector:
+    app: vigil-actuator
+  ports:
+  - name: a2a-port
+    port: 8002
+    targetPort: 8002
+    protocol: TCP
+  type: ClusterIP

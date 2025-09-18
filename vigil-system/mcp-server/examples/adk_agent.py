@@ -25,7 +25,7 @@ if not os.path.exists(PATH_TO_VIGIL_MCP_SERVER):
 
 # Synchronous agent definition (required for ADK deployment)
 root_agent = LlmAgent(
-    model='gemini-2.0-flash',
+    model='gemini-2.5-flash',
     name='vigil_fraud_detection_agent',
     instruction="""You are the Vigil fraud detection assistant. You have access to banking 
     operations through secure MCP tools. You can:
@@ -62,7 +62,7 @@ root_agent = LlmAgent(
 async def get_agent_async():
     """Creates an ADK Agent equipped with tools from the Vigil MCP Server."""
     return LlmAgent(
-        model='gemini-2.0-flash',
+        model='gemini-2.5-flash',
         name='vigil_fraud_detection_agent_async',
         instruction="""You are the Vigil fraud detection assistant. You have access to banking 
         operations through secure MCP tools for detecting and preventing fraud.""",
