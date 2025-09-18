@@ -19,8 +19,8 @@ RUN pip install --no-cache-dir -r requirements.txt
 COPY agent.py .
 COPY config.yaml .
 
-# Copy the MCP server (from parent directory)
-COPY ../vigil_mcp_server.py ./vigil_mcp_lowlevel.py
+# Copy the MCP server
+COPY vigil_mcp_lowlevel.py ./vigil_mcp_lowlevel.py
 
 # Create directories for logs and data
 RUN mkdir -p /app/logs /app/data

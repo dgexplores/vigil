@@ -1,0 +1,11 @@
+---
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: bank-of-anthos
+  labels:
+    name: bank-of-anthos
+    purpose: financial-services
+    system: bank-of-anthos
+  annotations:
+    description: "Bank of Anthos - Sample banking application for Kubernetes deployment"

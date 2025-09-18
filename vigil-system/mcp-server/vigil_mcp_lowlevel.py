@@ -361,40 +361,45 @@ async def run_stdio_server():
 
 
 async def run_streamable_http_server(host: str = "0.0.0.0", port: int = 8000):
-    """Run the MCP server using streamable HTTP transport."""
-    from mcp.server.streamable_http_manager import StreamableHTTPSessionManager
+    """Run the MCP server using HTTP transport with a simple health endpoint."""
     from starlette.applications import Starlette
-    from starlette.routing import Mount
+    from starlette.routing import Route
+    from starlette.responses import JSONResponse
     import uvicorn
     
-    logger.info(f"Starting Vigil MCP Server (Low-Level) with streamable HTTP on {host}:{port}")
+    logger.info(f"Starting Vigil MCP Server (Low-Level) with HTTP on {host}:{port}")
     logger.info(f"Bank of Anthos base URL: {BANK_BASE_URL}")
     
-    # Create session manager
-    session_manager = StreamableHTTPSessionManager()
+    # Simple health check endpoint
+    async def health(request):
+        return JSONResponse({
+            "status": "healthy",
+            "service": "vigil-mcp-server",
+            "version": "1.0.0",
+            "timestamp": datetime.utcnow().isoformat(),
+            "bank_url": BANK_BASE_URL
+        })
     
-    # Create ASGI app for the MCP server
-    async def mcp_app(scope, receive, send):
-        async with session_manager.connect_http(scope, receive, send) as streams:
-            if streams is not None:
-                read_stream, write_stream = streams
-                await server.run(
-                    read_stream,
-                    write_stream,
-                    InitializationOptions(
-                        server_name="vigil-mcp-server",
-                        server_version="1.0.0",
-                        capabilities=server.get_capabilities(
-                            notification_options=NotificationOptions(),
-                            experimental_capabilities={},
-                        ),
-                    ),
-                )
+    # Simple MCP capabilities endpoint
+    async def capabilities(request):
+        tools = await handle_list_tools()
+        resources = await handle_list_resources()
+        return JSONResponse({
+            "capabilities": {
+                "tools": [tool.model_dump(mode='json') for tool in tools],
+                "resources": [resource.model_dump(mode='json') for resource in resources]
+            },
+            "server_info": {
+                "name": "vigil-mcp-server",
+                "version": "1.0.0"
+            }
+        })
     
-    # Create Starlette app
+    # Create Starlette app with basic routes
     starlette_app = Starlette(
         routes=[
-            Mount("/mcp", app=mcp_app),
+            Route("/health", endpoint=health, methods=["GET"]),
+            Route("/capabilities", endpoint=capabilities, methods=["GET"]),
         ]
     )
     
