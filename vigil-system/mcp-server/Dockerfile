@@ -13,7 +13,7 @@ COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
 # Copy application code
-COPY mcp.py .
+COPY vigil_mcp_server.py .
 
 # Create non-root user for security
 RUN useradd --create-home --shell /bin/bash vigil
@@ -27,4 +27,4 @@ HEALTHCHECK --interval=30s --timeout=10s --start-period=5s --retries=3 \
     CMD curl -f http://localhost:8000/health || exit 1
 
 # Run the application
-CMD ["python", "mcp.py"]
+CMD ["python", "vigil_mcp_server.py", "--transport", "streamable-http"]

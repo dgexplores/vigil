@@ -1,6 +1,16 @@
 # Vigil MCP Server
 
-The Model Context Protocol (MCP) server for the Vigil fraud detection system. This server provides a standardized interface to Bank of Anthos APIs, allowing AI agents to interact with banking services through well-defined tools.
+A fully compliant Model Context Protocol (MCP) server for the Vigil fraud detection system. This server provides a standardized MCP interface to Bank of Anthos APIs, allowing AI agents and MCP clients to interact with banking services through well-defined tools and resources.
+
+## MCP Compliance
+
+This server implements the [Model Context Protocol specification](https://modelcontextprotocol.io/) using the official MCP Python SDK. It supports:
+
+- **FastMCP Framework**: Built on the official MCP Python SDK with FastMCP
+- **Streamable HTTP Transport**: Production-ready transport for scalable deployments
+- **Structured Output**: Tools return properly typed, validated data structures
+- **Lifespan Management**: Proper resource lifecycle management with dependency injection
+- **Context Integration**: Full MCP Context support for logging, progress, and resource access
 
 ## Overview
 
@@ -14,7 +24,9 @@ The MCP server acts as a universal translator between the Vigil AI agents and th
 - **Health Monitoring**: Built-in health checks for Kubernetes deployment
 - **Security**: Non-root container execution and security-focused configuration
 
-## Available Tools
+## Available MCP Tools
+
+All tools use the MCP Context system for logging and error handling, and return structured data validated against output schemas.
 
 ### 1. `get_transactions(account_id: str)`
 Retrieves transaction history for a specific bank account.
@@ -22,7 +34,7 @@ Retrieves transaction history for a specific bank account.
 **Parameters:**
 - `account_id`: Unique identifier for the bank account
 
-**Returns:** JSON string containing transaction history
+**Returns:** Structured transaction history with validated schema
 
 ### 2. `submit_transaction(from_account: str, to_account: str, amount: int, routing_number: str)`
 Submits a new transaction to the banking ledger.
@@ -33,7 +45,7 @@ Submits a new transaction to the banking ledger.
 - `amount`: Transaction amount in cents
 - `routing_number`: Bank routing number
 
-**Returns:** JSON string containing transaction result
+**Returns:** Structured transaction result with confirmation details
 
 ### 3. `get_user_details(user_id: str)`
 Retrieves detailed information about a specific user.
@@ -41,25 +53,33 @@ Retrieves detailed information about a specific user.
 **Parameters:**
 - `user_id`: Unique identifier for the user
 
-**Returns:** JSON string containing user details
+**Returns:** Structured user details with account information
 
 ### 4. `lock_account(user_id: str, reason: str)`
 Locks a user account to prevent further transactions (fraud mitigation).
 
 **Parameters:**
 - `user_id`: Unique identifier for the user
-- `reason`: Reason for locking (e.g., \"Suspected fraud\")
+- `reason`: Reason for locking (e.g., "Suspected fraud")
 
-**Returns:** JSON string containing lock operation result
+**Returns:** Structured lock operation result
 
-### 5. `login(username: str, password: str)`
+### 5. `authenticate_user(username: str, password: str)`
 Authenticates a user and retrieves their JWT token.
 
 **Parameters:**
 - `username`: User's username
 - `password`: User's password
 
-**Returns:** JSON string containing authentication result
+**Returns:** Structured authentication result with token details
+
+## Available MCP Resources
+
+### 1. `vigil://config/bank-connection`
+Returns current Bank of Anthos connection configuration including base URL, timeout settings, and authentication username.
+
+### 2. `vigil://status/health` 
+Provides current health status of the Vigil MCP Server including service status and version information.
 
 ## Configuration
 
@@ -101,10 +121,23 @@ The server will be available at `http://localhost:8000`.
 
 ### Testing
 
-Test the health endpoint:
+#### MCP Compliance Testing
+
+Test the MCP server functionality:
 ```bash
-curl http://localhost:8000/health
+# Forward the service port
+kubectl port-forward -n vigil-system svc/mcp-server 8080:8000 &
+
+# Run the compliance test
+python test_mcp_compliance.py
 ```
+
+#### Manual MCP Client Testing
+
+Connect with any MCP client using the streamable HTTP transport:
+- **Transport**: streamable-http
+- **URL**: `http://localhost:8080/mcp` (when port-forwarded)
+- **URL**: `http://mcp-server.vigil-system.svc.cluster.local:8000/mcp` (from within cluster)
 
 ### Building Docker Image
 

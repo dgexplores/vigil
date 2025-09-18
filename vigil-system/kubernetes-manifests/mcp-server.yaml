@@ -94,16 +94,14 @@ spec:
               name: vigil-secrets
               key: JWT_SECRET
         livenessProbe:
-          httpGet:
-            path: /health
+          tcpSocket:
             port: 8000
           initialDelaySeconds: 30
           periodSeconds: 10
           timeoutSeconds: 5
           failureThreshold: 3
         readinessProbe:
-          httpGet:
-            path: /health
+          tcpSocket:
             port: 8000
           initialDelaySeconds: 5
           periodSeconds: 5
