@@ -21,7 +21,8 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 # Configuration
-PROJECT_ROOT = Path(__file__).parent
+# Since this script is in scripts/, go up one level to find vigil-system/
+PROJECT_ROOT = Path(__file__).parent.parent
 VIGIL_SYSTEM_PATH = PROJECT_ROOT / "vigil-system"
 MCP_SERVER_PATH = VIGIL_SYSTEM_PATH / "mcp-server"
 MCP_SERVER_SCRIPT = MCP_SERVER_PATH / "vigil_mcp_server.py"

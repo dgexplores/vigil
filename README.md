@@ -18,24 +18,28 @@ This project demonstrates the power of Google Kubernetes Engine (GKE) combined w
 
 ```
 ┌─────────────────────────────────────────────────────────────────┐
-│                        Bank of Anthos                           │
-│  (Microservices: Frontend, Ledger, Transactions, Users)         │
-└─────────────────────────────────────────────────────────────────┘
-                                │
-                    ┌───────────┴───────────┐
-                    │                       │
-        ┌───────────▼────────────┐ ┌───────▼──────────┐
-        │   MCP Server (Local)   │ │  Vigil Agents    │
-        │  • Transaction API     │ │  (GKE Cluster)   │
-        │  • User Management     │ │                  │
-        │  • Account Operations  │ │  • Observer      │
-        └────────────────────────┘ │  • Analyst       │
-                    │              │  • Actuator      │
-                    │              └──────────────────┘
-        ┌───────────▼────────────┐
-        │   AI Agents / Warp     │
-        │  Terminal Integration  │
-        └────────────────────────┘
+│                     GKE Cluster                                 │
+│  ┌─────────────────────────────────────────────────────────┐    │
+│  │                 Bank of Anthos                          │    │
+│  │  (Microservices: Frontend, Ledger, Transactions, Users) │    │
+│  └─────────────────┬───────────────────────────────────────┘    │
+│                    │                                            │
+│        ┌───────────▼────────────┐ ┌─────────────────────────┐   │
+│        │    MCP Server          │ │    Vigil Agents         │   │
+│        │  • Transaction API     │ │  • Observer Agent       │   │
+│        │  • User Management     │ │  • Analyst Agent        │   │
+│        │  • Account Operations  │ │  • Actuator Agent       │   │
+│        │  • Database Fallback   │ │  • AI-Powered Analysis  │   │
+│        └────────────────────────┘ └─────────────────────────┘   │
+└─────────────────┬──────────────────────────────────────────────┘
+                  │ Port Forward
+                  │ (Optional for local access)
+      ┌───────────▼────────────┐
+      │   AI Agents / Warp     │
+      │  Terminal Integration  │
+      │  • Local MCP Client    │
+      │  • Agent Tools Access  │
+      └────────────────────────┘
 ```
 
 ## 📁 Project Structure
@@ -46,7 +50,7 @@ gke-turns10-hackathon-vigil/
 │   ├── observer-agent/     # Transaction monitoring agent
 │   ├── analyst-agent/      # AI-powered fraud analysis
 │   ├── actuator-agent/     # Protective action execution
-│   ├── mcp-server/        # Model Context Protocol server
+│   ├── mcp-server/        # Model Context Protocol server (runs in cluster)
 │   └── k8s/               # Kubernetes manifests
 │
 ├── bank-of-anthos/        # Bank of Anthos submodule
@@ -100,28 +104,34 @@ cd vigil-system
 ./deploy.sh all
 ```
 
-### 4. Set Up Port Forwarding
+### 4. Set Up Port Forwarding (Optional - for Local MCP Access)
 
-For local MCP server access to Bank of Anthos services:
+The MCP server runs in the cluster, but for local development and Warp Terminal integration, you can forward services:
 
 ```bash
-# Run these in separate terminals or background
+# Port forward Bank of Anthos services for local MCP server access
 kubectl port-forward svc/userservice 8081:8080 &
 kubectl port-forward svc/transactionhistory 8082:8080 &
 kubectl port-forward svc/ledgerwriter 8083:8080 &
+
+# Optional: Port forward MCP server itself for direct access
+kubectl port-forward svc/mcp-server 8000:8000 &
 ```
 
-### 5. Configure MCP Integration (Optional - for Warp Terminal)
+### 5. Configure Local MCP Integration (Optional - for Warp Terminal)
+
+For local AI agent access through Warp Terminal or other MCP clients:
 
 ```bash
-# Install MCP server dependencies
+# Set up local MCP client environment
 cd vigil-system/mcp-server
 python3 -m venv venv
 source venv/bin/activate
 pip install -r requirements.txt
 
-# Configure Warp Terminal (if using)
-# Copy config/vigil-warp-mcp-config.json to your Warp MCP config directory
+# Configure Warp Terminal MCP integration
+# The config points to scripts/vigil-mcp-client.py which starts a local MCP server
+# that connects to the cluster services via port forwarding
 ```
 
 ## 🧪 Testing
@@ -156,17 +166,22 @@ kubectl logs -f deployment/vigil-actuator
 
 ### MCP Server
 
+**Deployment**: Runs as a service in the GKE cluster alongside Bank of Anthos
+**Local Access**: Can be accessed locally through port forwarding for development
+
 Provides standardized API access to Bank of Anthos for AI agents:
 - `get_transactions`: Retrieve transaction history
-- `authenticate_user`: User authentication
+- `authenticate_user`: User authentication  
 - `get_user_details`: Fetch user information
 - `lock_account`: Fraud mitigation actions
 - `submit_transaction`: Process new transactions
 
 ### Integration Features
 
+- **Cluster Deployment**: MCP server runs natively in the GKE cluster
+- **Local Development**: Port forwarding enables local AI agent access
 - **Automatic Fallback**: Falls back to direct database queries when APIs fail
-- **GKE Authentication**: Properly configured for GKE cluster access
+- **GKE Authentication**: Properly configured for cluster service access
 - **Warp Terminal Support**: Native MCP integration for AI-powered terminal
 
 ## 📊 Fraud Detection Capabilities
@@ -215,10 +230,11 @@ This project is licensed under the Apache License 2.0.
 
 ## 🙏 Acknowledgments
 
-- Google Cloud Platform for GKE
-- Google ADK team for the Agent Development Kit
-- Bank of Anthos sample application
-- Model Context Protocol (MCP) by Anthropic
+- **Google Cloud Platform** for GKE and the amazing cloud infrastructure
+- **Google ADK team** for the Agent Development Kit framework
+- **Warp Terminal team** for creating an exceptional tool that enables seamless agentic AI-assisted development through MCP integration
+- **Anthropic** for the Model Context Protocol (MCP) standard
+- **Bank of Anthos team** for the comprehensive sample banking application
 
 ---
 
