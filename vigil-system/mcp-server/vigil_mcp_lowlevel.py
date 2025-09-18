@@ -27,8 +27,8 @@ logger = logging.getLogger(__name__)
 # Configuration
 BANK_BASE_URL = os.getenv('BANK_BASE_URL', 'http://bank-of-anthos')
 REQUEST_TIMEOUT = int(os.getenv('REQUEST_TIMEOUT', '30'))
-AUTH_USERNAME = os.getenv('AUTH_USERNAME', 'admin')
-AUTH_PASSWORD = os.getenv('AUTH_PASSWORD', 'password')
+AUTH_USERNAME = os.getenv('AUTH_USERNAME', 'testuser')
+AUTH_PASSWORD = os.getenv('AUTH_PASSWORD', 'bankofanthos')
 JWT_SECRET = os.getenv('JWT_SECRET', 'secret-key-change-in-production')
 
 
@@ -53,10 +53,11 @@ class AuthManager:
         try:
             response = await self.http_client.post(
                 f"{BANK_BASE_URL}/login",
-                json={
+                data={
                     "username": AUTH_USERNAME,
                     "password": AUTH_PASSWORD
-                }
+                },
+                headers={"Content-Type": "application/x-www-form-urlencoded"}
             )
             response.raise_for_status()
             

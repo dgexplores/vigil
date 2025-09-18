@@ -5,9 +5,9 @@ metadata:
   name: vigil-config
   namespace: default
 data:
-  BANK_BASE_URL: "http://frontend.default.svc.cluster.local"
+  BANK_BASE_URL: "http://userservice.default.svc.cluster.local:8080"
   REQUEST_TIMEOUT: "30"
-  AUTH_USERNAME: "admin"
+  AUTH_USERNAME: "testuser"
   HOST: "0.0.0.0"
   PORT: "8000"
   LOG_LEVEL: "info"
@@ -21,7 +21,7 @@ metadata:
 type: Opaque
 data:
   # Base64 encoded values - replace with actual values
-  REDACTED  # "password" in base64
+  AUTH_PASSWORD: YmFua29mYW50aG9z  # "bankofanthos" in base64
   JWT_SECRET: REDACTED  # "secret-key-change-in-production" in base64
 
 ---
