@@ -14,9 +14,11 @@ import os
 from typing import Any, Dict, List, Optional, Set
 from datetime import datetime, timedelta
 import hashlib
+from aiohttp import web
+import threading
 
-from google.adk.agents import LoopAgent
-from google.adk.tools.mcp_tool.mcp_toolset import MCPToolset
+from google.adk.agents import Agent
+from google.adk.tools.mcp_tool.mcp_toolset import McpToolset
 from google.adk.tools.mcp_tool.mcp_session_manager import StdioConnectionParams
 from mcp import StdioServerParameters
 
@@ -40,9 +42,46 @@ BANK_SERVICES = {
     'user_service': os.getenv('USER_SERVICE_URL', 'http://userservice:8080')
 }
 
+# Global variables for health status
+app_ready = False
+app_healthy = False
 
-def create_observer_agent() -> LoopAgent:
-    """Create the Vigil Observer Agent as a continuous monitoring loop."""
+
+async def health_handler(request):
+    """Health check endpoint."""
+    if app_healthy:
+        return web.json_response({"status": "healthy", "timestamp": datetime.utcnow().isoformat()})
+    else:
+        return web.json_response({"status": "unhealthy", "timestamp": datetime.utcnow().isoformat()}, status=503)
+
+
+async def ready_handler(request):
+    """Readiness check endpoint."""
+    if app_ready:
+        return web.json_response({"status": "ready", "timestamp": datetime.utcnow().isoformat()})
+    else:
+        return web.json_response({"status": "not ready", "timestamp": datetime.utcnow().isoformat()}, status=503)
+
+
+async def start_health_server():
+    """Start the health check HTTP server."""
+    global app_healthy
+    app = web.Application()
+    app.router.add_get('/health', health_handler)
+    app.router.add_get('/ready', ready_handler)
+    
+    runner = web.AppRunner(app)
+    await runner.setup()
+    site = web.TCPSite(runner, '0.0.0.0', OBSERVER_PORT)
+    await site.start()
+    
+    app_healthy = True
+    logger.info(f"Health server started on port {OBSERVER_PORT}")
+    return runner
+
+
+def create_observer_agent() -> Agent:
+    """Create the Vigil Observer Agent."""
     
     # Ensure MCP server path exists
     if not os.path.exists(MCP_SERVER_PATH):
@@ -51,12 +90,10 @@ def create_observer_agent() -> LoopAgent:
     else:
         mcp_server_path = MCP_SERVER_PATH
     
-    agent = LoopAgent(
+    agent = Agent(
         name='vigil_observer_agent',
-        loop_function=transaction_monitoring_loop,
-        interval_seconds=POLLING_INTERVAL,
         tools=[
-            MCPToolset(
+            McpToolset(
                 connection_params=StdioConnectionParams(
                     server_params=StdioServerParameters(
                         command='python3',
@@ -66,9 +103,7 @@ def create_observer_agent() -> LoopAgent:
                 # Observer needs read access to all transaction data
                 tool_filter=['get_transactions', 'get_user_details', 'get_account_balance']
             )
-        ],
-        # Enable A2A communication for sending data to Analyst
-        a2a_port=OBSERVER_PORT
+        ]
     )
     
     return agent
@@ -77,7 +112,7 @@ def create_observer_agent() -> LoopAgent:
 class TransactionProcessor:
     """Processes and normalizes transaction data from Bank of Anthos."""
     
-    def __init__(self, agent: LoopAgent):
+    def __init__(self, agent: Agent):
         self.agent = agent
         self.processed_transactions: Set[str] = set()  # Track processed transactions
         self.last_check_time = datetime.utcnow() - timedelta(minutes=5)  # Start 5 minutes back
@@ -102,7 +137,7 @@ class TransactionProcessor:
             logger.info(f"Querying transactions since {self.last_check_time.isoformat()}")
             
             # Use MCP tools to get transaction data
-            response = await self.agent.prompt_model(query_prompt)
+            response = await self.agent.run(query_prompt)
             transactions = self._parse_transaction_response(response)
             
             # Filter out already processed transactions
@@ -275,13 +310,13 @@ class TransactionProcessor:
             # Get user details if available
             if user_id:
                 user_prompt = f"Get user details for user ID: {user_id}"
-                user_response = await self.agent.prompt_model(user_prompt)
+                user_response = await self.agent.run(user_prompt)
                 tx_data['user_context'] = user_response
             
             # Get account balance if available
             if from_account:
                 balance_prompt = f"Get account balance for account: {from_account}"
-                balance_response = await self.agent.prompt_model(balance_prompt)
+                balance_response = await self.agent.run(balance_prompt)
                 tx_data['account_balance'] = balance_response
                 
         except Exception as e:
@@ -289,7 +324,7 @@ class TransactionProcessor:
             tx_data['enrichment_error'] = str(e)
 
 
-async def transaction_monitoring_loop(agent: LoopAgent) -> None:
+async def transaction_monitoring_loop(agent: Agent) -> None:
     """
     Main monitoring loop function for the Observer agent.
     
@@ -335,6 +370,20 @@ async def transaction_monitoring_loop(agent: LoopAgent) -> None:
         logger.error(f"Error in monitoring loop: {e}")
 
 
+async def run_monitoring_loop(agent: Agent):
+    """Continuously run the monitoring loop with intervals."""
+    logger.info(f"Starting continuous monitoring with {POLLING_INTERVAL}s intervals")
+    
+    while True:
+        try:
+            await transaction_monitoring_loop(agent)
+        except Exception as e:
+            logger.error(f"Error in monitoring iteration: {e}")
+        
+        # Wait for next polling interval
+        await asyncio.sleep(POLLING_INTERVAL)
+
+
 async def send_transactions_to_analyst(transactions: List[Dict[str, Any]]) -> None:
     """
     Send normalized transactions to the Analyst agent for fraud analysis.
@@ -365,31 +414,40 @@ async def send_transactions_to_analyst(transactions: List[Dict[str, Any]]) -> No
         logger.error(f"Error sending transactions to Analyst: {e}")
 
 
-# Main agent instance for synchronous deployment
-root_agent = create_observer_agent()
-
-
 # Async agent creation for development
 async def get_agent_async():
     """Create agent for adk web development environment."""
     return create_observer_agent()
 
 
-if __name__ == "__main__":
-    # For testing purposes
-    import asyncio
+async def main():
+    """Main entry point for the observer agent."""
+    global app_ready
     
-    async def test_monitoring():
-        """Test the transaction monitoring functionality."""
+    logger.info("Starting Vigil Observer Agent...")
+    
+    try:
+        # Start health server first
+        health_runner = await start_health_server()
+        logger.info("Health server started")
+        
+        # Create the observer agent
         agent = create_observer_agent()
-        processor = TransactionProcessor(agent)
+        logger.info("Observer agent created")
         
-        logger.info("Testing transaction monitoring...")
+        # Mark as ready after agent is created
+        app_ready = True
+        logger.info("Observer agent marked as ready")
         
-        # Simulate transaction monitoring loop
-        await transaction_monitoring_loop(agent)
+        # Start the monitoring loop
+        logger.info("Starting transaction monitoring loop...")
+        await run_monitoring_loop(agent)
         
-        print("\nObserver monitoring test completed")
-    
-    # Run test
-    asyncio.run(test_monitoring())
+    except Exception as e:
+        logger.error(f"Failed to start observer agent: {e}")
+        raise
+
+
+if __name__ == "__main__":
+    # Run the main async function
+    asyncio.run(main())

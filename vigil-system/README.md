@@ -103,12 +103,12 @@ The automated deployment script handles everything:
 
 ```bash
 # Check agent status
-kubectl get pods -n vigil-system
+kubectl get pods
 
 # View logs
-kubectl logs -f deployment/vigil-analyst -n vigil-system
-kubectl logs -f deployment/vigil-observer -n vigil-system
-kubectl logs -f deployment/vigil-actuator -n vigil-system
+kubectl logs -f deployment/vigil-analyst
+kubectl logs -f deployment/vigil-observer
+kubectl logs -f deployment/vigil-actuator
 ```
 
 ### 4. Run Integration Tests
@@ -198,18 +198,18 @@ echo -n "your-gemini-api-key" | base64
 
 ```bash
 # Check agent health
-kubectl get pods -n vigil-system
-kubectl describe pod <pod-name> -n vigil-system
+kubectl get pods
+kubectl describe pod <pod-name>
 ```
 
 ### Logs and Metrics
 
 ```bash
 # Stream logs
-kubectl logs -f deployment/vigil-analyst -n vigil-system
+kubectl logs -f deployment/vigil-analyst
 
 # Check metrics (if enabled)
-kubectl port-forward svc/vigil-analyst 8091:8091 -n vigil-system
+kubectl port-forward svc/vigil-analyst 8091:8091
 curl http://localhost:8091/metrics
 ```
 
@@ -217,7 +217,7 @@ curl http://localhost:8091/metrics
 
 ```bash
 # Update configuration without restart
-kubectl edit configmap vigil-config -n vigil-system
+kubectl edit configmap vigil-config
 ```
 
 ## 🧪 Testing
@@ -245,8 +245,8 @@ pytest -v test_vigil_integration.py::test_analyst_agent_fraud_detection
 
 ```bash
 # Simulate high transaction volume
-kubectl scale deployment vigil-observer --replicas=3 -n vigil-system
-kubectl scale deployment vigil-analyst --replicas=5 -n vigil-system
+kubectl scale deployment vigil-observer --replicas=3
+kubectl scale deployment vigil-analyst --replicas=5
 ```
 
 ## 🔒 Security

@@ -165,12 +165,9 @@ deploy_to_k8s() {
     sed "s|vigil/observer-agent:latest|$OBSERVER_IMAGE|g" k8s/observer-deployment.yaml > k8s/observer-deployment-temp.yaml
     sed "s|vigil/actuator-agent:latest|$ACTUATOR_IMAGE|g" k8s/actuator-deployment.yaml > k8s/actuator-deployment-temp.yaml
     
-    # Deploy namespace and configuration first
-    echo "🔧 Deploying namespace and configuration..."
+    # Deploy configuration to default namespace
+    echo "🔧 Deploying configuration to default namespace..."
     kubectl apply -f k8s/namespace-and-config.yaml
-    
-    # Wait for namespace to be ready
-    kubectl wait --for=condition=Active namespace/vigil-system --timeout=60s
     
     # Deploy the agents
     echo "🚀 Deploying Vigil agents..."
@@ -191,24 +188,24 @@ verify_deployment() {
     echo "⏳ Waiting for deployments to be ready..."
     
     # Wait for deployments
-    kubectl wait --for=condition=available --timeout=300s deployment/vigil-analyst -n vigil-system
-    kubectl wait --for=condition=available --timeout=300s deployment/vigil-observer -n vigil-system
-    kubectl wait --for=condition=available --timeout=300s deployment/vigil-actuator -n vigil-system
+    kubectl wait --for=condition=available --timeout=300s deployment/vigil-analyst
+    kubectl wait --for=condition=available --timeout=300s deployment/vigil-observer
+    kubectl wait --for=condition=available --timeout=300s deployment/vigil-actuator
     
     echo "✅ All deployments are ready"
     
     # Show deployment status
     echo ""
     echo "📊 Deployment Status:"
-    kubectl get deployments -n vigil-system
+    kubectl get deployments
     
     echo ""
     echo "🏃 Running Pods:"
-    kubectl get pods -n vigil-system
+    kubectl get pods
     
     echo ""
     echo "🔗 Services:"
-    kubectl get services -n vigil-system
+    kubectl get services
 }
 
 # Function to show useful information
@@ -218,22 +215,25 @@ show_info() {
     echo "🎉 Vigil Agent System deployed successfully!"
     echo ""
     echo "🔍 To monitor the system:"
-    echo "  kubectl get pods -n vigil-system -w"
+    echo "  kubectl get pods -w"
     echo ""
     echo "📋 To view logs:"
-    echo "  kubectl logs -f deployment/vigil-analyst -n vigil-system"
-    echo "  kubectl logs -f deployment/vigil-observer -n vigil-system"  
-    echo "  kubectl logs -f deployment/vigil-actuator -n vigil-system"
+    echo "  kubectl logs -f deployment/vigil-analyst"
+    echo "  kubectl logs -f deployment/vigil-observer"  
+    echo "  kubectl logs -f deployment/vigil-actuator"
     echo ""
     echo "🔧 To update configuration:"
-    echo "  kubectl edit configmap vigil-config -n vigil-system"
+    echo "  kubectl edit configmap vigil-config"
     echo ""
     echo "🗑️  To clean up:"
-    echo "  kubectl delete namespace vigil-system"
+    echo "  kubectl delete deployment vigil-analyst vigil-observer vigil-actuator"
+    echo "  kubectl delete service vigil-analyst vigil-observer vigil-actuator"
+    echo "  kubectl delete configmap vigil-config"
+    echo "  kubectl delete secret vigil-secrets"
     echo ""
     
     # Show external IP if LoadBalancer services exist
-    external_ips=$(kubectl get services -n vigil-system -o jsonpath='{.items[*].status.loadBalancer.ingress[0].ip}' 2>/dev/null || echo "")
+    external_ips=$(kubectl get services -o jsonpath='{.items[*].status.loadBalancer.ingress[0].ip}' 2>/dev/null || echo "")
     if [[ ! -z "$external_ips" && "$external_ips" != "null" ]]; then
         echo "🌐 External IPs: $external_ips"
         echo ""
@@ -278,7 +278,10 @@ main() {
             ;;
         "clean")
             print_section "Cleaning up Vigil system"
-            kubectl delete namespace vigil-system --ignore-not-found=true
+            kubectl delete deployment vigil-analyst vigil-observer vigil-actuator --ignore-not-found=true
+            kubectl delete service vigil-analyst vigil-observer vigil-actuator --ignore-not-found=true
+            kubectl delete configmap vigil-config --ignore-not-found=true
+            kubectl delete secret vigil-secrets --ignore-not-found=true
             echo "✅ Vigil system cleaned up"
             ;;
         *)
@@ -303,12 +306,8 @@ set -euo pipefail
 
 echo "Deploying Vigil System to Kubernetes..."
 
-# Create namespace first
-echo "Creating vigil-system namespace..."
-kubectl apply -f kubernetes-manifests/namespace.yaml
-
-# Wait a moment for namespace to be created
-sleep 2
+# Deploy to default namespace
+echo "Deploying to default namespace..."
 
 # Apply all manifests
 echo "Deploying MCP Server..."
@@ -316,22 +315,22 @@ kubectl apply -f kubernetes-manifests/mcp-server.yaml
 
 # Wait for deployment to be ready
 echo "Waiting for MCP Server to be ready..."
-kubectl wait --for=condition=available --timeout=300s deployment/mcp-server -n vigil-system
+kubectl wait --for=condition=available --timeout=300s deployment/mcp-server
 
 # Check status
 echo "Deployment status:"
-kubectl get all -n vigil-system
+kubectl get all
 
 # Show service endpoint
 echo ""
 echo "MCP Server service:"
-kubectl get service mcp-server -n vigil-system
+kubectl get service mcp-server
 
 # Check logs
 echo ""
 echo "Recent logs from MCP Server:"
-kubectl logs -l app=mcp-server -n vigil-system --tail=20
+kubectl logs -l app=mcp-server --tail=20
 
 echo ""
 echo "Vigil System deployed successfully!"
-echo "MCP Server is running at: mcp-server.vigil-system.svc.cluster.local:8000"
+echo "MCP Server is running at: mcp-server.default.svc.cluster.local:8000"

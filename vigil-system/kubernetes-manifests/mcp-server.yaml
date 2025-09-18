@@ -3,9 +3,9 @@ apiVersion: v1
 kind: ConfigMap
 metadata:
   name: vigil-config
-  namespace: vigil-system
+  namespace: default
 data:
-  BANK_BASE_URL: "http://frontend.bank-of-anthos.svc.cluster.local"
+  BANK_BASE_URL: "http://frontend.default.svc.cluster.local"
   REQUEST_TIMEOUT: "30"
   AUTH_USERNAME: "admin"
   HOST: "0.0.0.0"
@@ -17,7 +17,7 @@ apiVersion: v1
 kind: Secret
 metadata:
   name: vigil-secrets
-  namespace: vigil-system
+  namespace: default
 type: Opaque
 data:
   # Base64 encoded values - replace with actual values
@@ -29,7 +29,7 @@ apiVersion: apps/v1
 kind: Deployment
 metadata:
   name: mcp-server
-  namespace: vigil-system
+  namespace: default
   labels:
     app: mcp-server
     component: vigil-system
@@ -137,7 +137,7 @@ apiVersion: v1
 kind: Service
 metadata:
   name: mcp-server
-  namespace: vigil-system
+  namespace: default
   labels:
     app: mcp-server
     component: vigil-system
@@ -156,7 +156,7 @@ apiVersion: policy/v1
 kind: PodDisruptionBudget
 metadata:
   name: mcp-server-pdb
-  namespace: vigil-system
+  namespace: default
 spec:
   minAvailable: 1
   selector:
@@ -168,7 +168,7 @@ apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
 metadata:
   name: mcp-server-network-policy
-  namespace: vigil-system
+  namespace: default
 spec:
   podSelector:
     matchLabels:
@@ -177,19 +177,13 @@ spec:
   - Ingress
   - Egress
   ingress:
-  - from:
-    - namespaceSelector:
-        matchLabels:
-          name: vigil-system
+  - from: []  # Allow ingress from any pod in default namespace
     ports:
     - protocol: TCP
       port: 8000
   egress:
-  # Allow outbound to Bank of Anthos services
-  - to:
-    - namespaceSelector:
-        matchLabels:
-          name: bank-of-anthos
+  # Allow outbound to Bank of Anthos services (same namespace now)
+  - to: []
     ports:
     - protocol: TCP
       port: 80

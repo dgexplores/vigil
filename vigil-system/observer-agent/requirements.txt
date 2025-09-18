@@ -10,7 +10,7 @@ mcp>=1.0.0
 asyncio-contextmanager>=1.0.0
 typing-extensions>=4.0.0
 
-# HTTP client for Bank of Anthos API calls
+# HTTP client for Bank of Anthos API calls and health endpoints
 aiohttp>=3.8.0
 httpx>=0.24.0
 

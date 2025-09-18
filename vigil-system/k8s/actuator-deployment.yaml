@@ -2,13 +2,13 @@ apiVersion: apps/v1
 kind: Deployment
 metadata:
   name: vigil-actuator
-  namespace: vigil-system
+  namespace: default
   labels:
     app: vigil-actuator
     component: action-executor
     tier: protective-actions
 spec:
-  replicas: 2
+  replicas: 1
   selector:
     matchLabels:
       app: vigil-actuator
@@ -21,7 +21,7 @@ spec:
     spec:
       containers:
       - name: actuator-agent
-        image: vigil/actuator-agent:latest
+        image: gcr.io/vigil-demo-hackathon/vigil-actuator-agent:latest
         ports:
         - containerPort: 8002
           name: a2a-port
@@ -37,11 +37,11 @@ spec:
               key: auto_execute_actions
         resources:
           requests:
-            memory: "256Mi"
-            cpu: "100m"
+            memory: "64Mi"
+            cpu: "50m"
           limits:
-            memory: "512Mi"
-            cpu: "250m"
+            memory: "256Mi"
+            cpu: "200m"
         livenessProbe:
           httpGet:
             path: /health
@@ -75,7 +75,7 @@ apiVersion: v1
 kind: Service
 metadata:
   name: vigil-actuator
-  namespace: vigil-system
+  namespace: default
   labels:
     app: vigil-actuator
 spec:

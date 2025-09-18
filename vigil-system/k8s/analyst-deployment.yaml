@@ -2,13 +2,13 @@ apiVersion: apps/v1
 kind: Deployment
 metadata:
   name: vigil-analyst
-  namespace: vigil-system
+  namespace: default
   labels:
     app: vigil-analyst
     component: fraud-detection
     tier: cognitive
 spec:
-  replicas: 2
+  replicas: 1
   selector:
     matchLabels:
       app: vigil-analyst
@@ -21,7 +21,7 @@ spec:
     spec:
       containers:
       - name: analyst-agent
-        image: vigil/analyst-agent:latest
+        image: gcr.io/vigil-demo-hackathon/vigil-analyst-agent:latest
         ports:
         - containerPort: 8001
           name: a2a-port
@@ -44,11 +44,11 @@ spec:
               key: gemini-api-key
         resources:
           requests:
-            memory: "512Mi"
-            cpu: "250m"
+            memory: "128Mi"
+            cpu: "100m"
           limits:
-            memory: "1Gi"
-            cpu: "500m"
+            memory: "512Mi"
+            cpu: "300m"
         livenessProbe:
           httpGet:
             path: /health
@@ -79,7 +79,7 @@ apiVersion: v1
 kind: Service
 metadata:
   name: vigil-analyst
-  namespace: vigil-system
+  namespace: default
   labels:
     app: vigil-analyst
 spec:

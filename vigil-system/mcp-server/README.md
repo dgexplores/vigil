@@ -212,7 +212,7 @@ The server will be available at `http://localhost:8000`.
 Test the MCP server functionality:
 ```bash
 # Forward the service port
-kubectl port-forward -n vigil-system svc/mcp-server 8080:8000 &
+kubectl port-forward svc/mcp-server 8080:8000 &
 
 # Run the compliance test
 python test_mcp_compliance.py
@@ -223,7 +223,7 @@ python test_mcp_compliance.py
 Connect with any MCP client using the streamable HTTP transport:
 - **Transport**: streamable-http
 - **URL**: `http://localhost:8080/mcp` (when port-forwarded)
-- **URL**: `http://mcp-server.vigil-system.svc.cluster.local:8000/mcp` (from within cluster)
+- **URL**: `http://mcp-server.default.svc.cluster.local:8000/mcp` (from within cluster)
 
 ### Building Docker Image
 
@@ -239,7 +239,7 @@ export PROJECT_ID=your-gcp-project-id
 
 - Kubernetes cluster (GKE recommended)
 - `kubectl` configured to access your cluster
-- Bank of Anthos deployed in `bank-of-anthos` namespace
+- Bank of Anthos deployed in `default` namespace
 
 ### Deploy to Kubernetes
 
@@ -249,8 +249,8 @@ export PROJECT_ID=your-gcp-project-id
    ../deploy.sh
    ```
 
-The MCP server will be deployed to the `vigil-system` namespace and available at:
-`mcp-server.vigil-system.svc.cluster.local:8000`
+The MCP server will be deployed to the `default` namespace and available at:
+`mcp-server.default.svc.cluster.local:8000`
 
 ## Security Considerations
 
@@ -292,13 +292,13 @@ The server provides several monitoring endpoints and features:
 
 View server logs:
 ```bash
-kubectl logs -l app=mcp-server -n vigil-system --follow
+kubectl logs -l app=mcp-server --follow
 ```
 
 Check service status:
 ```bash
-kubectl get pods -l app=mcp-server -n vigil-system
-kubectl describe deployment mcp-server -n vigil-system
+kubectl get pods -l app=mcp-server
+kubectl describe deployment mcp-server
 ```
 
 ## Architecture Integration

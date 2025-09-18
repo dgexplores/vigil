@@ -96,8 +96,7 @@ The prompt will also include few-shot examples of fraudulent and legitimate tran
 ### 4. GKE Deployment Architecture
 
 * **Namespace Strategy:**
-    * `bank-of-anthos`: The existing Bank of Anthos application will be deployed in its standard namespace.
-    * `vigil-system`: All new Vigil components (agents and MCP Server) will be deployed in this dedicated namespace to simplify resource management and access control.
+    * `default`: Both the Bank of Anthos application and all Vigil components (agents and MCP Server) are deployed in the default namespace to simplify service discovery and inter-service communication.
 * **Kubernetes Manifests:**
     * **Deployments:** Each of the four Vigil components will be managed by its own Kubernetes `Deployment` resource, specifying the container image, replicas, resource requests and limits, and environment variables.
     * **Services:** Kubernetes `Service` objects of type `ClusterIP` will manage network connectivity between the Vigil agents and the MCP server, allowing them to communicate using stable internal DNS names.
