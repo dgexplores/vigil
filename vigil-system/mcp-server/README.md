@@ -7,10 +7,24 @@ A fully compliant Model Context Protocol (MCP) server for the Vigil fraud detect
 This server implements the [Model Context Protocol specification](https://modelcontextprotocol.io/) using the official MCP Python SDK. It supports:
 
 - **FastMCP Framework**: Built on the official MCP Python SDK with FastMCP
+- **Low-Level MCP Server**: Alternative implementation for maximum ADK compatibility
 - **Streamable HTTP Transport**: Production-ready transport for scalable deployments
+- **Stdio Transport**: Compatible with Google ADK agents and development workflows
 - **Structured Output**: Tools return properly typed, validated data structures
 - **Lifespan Management**: Proper resource lifecycle management with dependency injection
 - **Context Integration**: Full MCP Context support for logging, progress, and resource access
+
+## Google ADK Integration
+
+The Vigil MCP Server is fully compatible with [Google Agent Development Kit (ADK)](https://google.github.io/adk-docs/) agents. ADK agents can connect to this server using the `MCPToolset` class to access banking operations for fraud detection.
+
+### ADK Compatibility Features
+
+- **Dual Implementation**: Both FastMCP (`vigil_mcp_server.py`) and low-level (`vigil_mcp_lowlevel.py`) versions
+- **Stdio Transport**: Perfect for ADK agent subprocess communication
+- **Synchronous Definition**: Agent definitions compatible with ADK deployment requirements
+- **Tool Filtering**: Support for selective tool exposure via `tool_filter` parameter
+- **Production Deployment**: Compatible with Cloud Run, GKE, and Vertex AI Agent Engine
 
 ## Overview
 
@@ -80,6 +94,78 @@ Returns current Bank of Anthos connection configuration including base URL, time
 
 ### 2. `vigil://status/health` 
 Provides current health status of the Vigil MCP Server including service status and version information.
+
+## ADK Agent Usage
+
+### Creating an ADK Agent
+
+Create an ADK agent that uses the Vigil MCP server:
+
+```python
+# examples/adk_agent.py
+from google.adk.agents import LlmAgent
+from google.adk.tools.mcp_tool.mcp_toolset import MCPToolset
+from google.adk.tools.mcp_tool.mcp_session_manager import StdioConnectionParams
+from mcp import StdioServerParameters
+
+root_agent = LlmAgent(
+    model='gemini-2.5-flash',
+    name='vigil_fraud_detection_agent',
+    instruction="""You are a fraud detection assistant with access to 
+    banking operations through secure MCP tools.""",
+    tools=[
+        MCPToolset(
+            connection_params=StdioConnectionParams(
+                server_params=StdioServerParameters(
+                    command='python3',
+                    args=['vigil_mcp_lowlevel.py', '--transport', 'stdio']
+                )
+            ),
+            # Optional: Filter which tools are exposed
+            tool_filter=['get_transactions', 'get_user_details', 'lock_account']
+        )
+    ],
+)
+```
+
+### Running with ADK
+
+```bash
+# In the examples directory
+adk web
+```
+
+Then select the `vigil_fraud_detection_agent` and try prompts like:
+- "Check transactions for account 12345"
+- "Get user details for user ID 67890"
+- "Lock account for user 67890 due to suspicious activity"
+
+### Deployment Patterns
+
+#### Pattern 1: Self-Contained Stdio (Recommended)
+```python
+# Agent includes MCP server as subprocess
+MCPToolset(
+    connection_params=StdioConnectionParams(
+        server_params=StdioServerParameters(
+            command='python3',
+            args=['/absolute/path/to/vigil_mcp_lowlevel.py']
+        )
+    )
+)
+```
+
+#### Pattern 2: Remote MCP Server (Streamable HTTP)
+```python
+# Agent connects to remote MCP server
+from google.adk.tools.mcp_tool.mcp_session_manager import SseConnectionParams
+
+MCPToolset(
+    connection_params=SseConnectionParams(
+        url="http://your-mcp-server.com:8000/mcp"
+    )
+)
+```
 
 ## Configuration
 
