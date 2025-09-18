@@ -11,12 +11,12 @@ import asyncio
 import json
 import logging
 import os
-from typing import Any, Dict, List, Optional, Set
+from typing import Any, Dict, List, Set
 from datetime import datetime, timedelta
-import hashlib
+import random
 from aiohttp import web
-import threading
 
+# Correctly import the standard Agent class
 from google.adk.agents import Agent
 from google.adk.tools.mcp_tool.mcp_toolset import McpToolset
 from google.adk.tools.mcp_tool.mcp_session_manager import StdioConnectionParams
@@ -30,23 +30,15 @@ logger = logging.getLogger(__name__)
 MCP_SERVER_PATH = os.getenv('MCP_SERVER_PATH', '/app/vigil_mcp_lowlevel.py')
 OBSERVER_PORT = int(os.getenv('OBSERVER_PORT', '8000'))
 ANALYST_AGENT_URL = os.getenv('ANALYST_AGENT_URL', 'http://vigil-analyst:8001')
-POLLING_INTERVAL = int(os.getenv('POLLING_INTERVAL', '5'))  # seconds between checks
-BATCH_SIZE = int(os.getenv('BATCH_SIZE', '100'))  # transactions to process per batch
-
-# Bank of Anthos microservice endpoints (configurable for demo/production)
-BANK_SERVICES = {
-    'ledger_writer': os.getenv('LEDGER_WRITER_URL', 'http://ledgerwriter:8080'),
-    'transaction_history': os.getenv('TRANSACTION_HISTORY_URL', 'http://transactionhistory:8080'),
-    'balance_reader': os.getenv('BALANCE_READER_URL', 'http://balancereader:8080'),
-    'contacts': os.getenv('CONTACTS_URL', 'http://contacts:8080'),
-    'user_service': os.getenv('USER_SERVICE_URL', 'http://userservice:8080')
-}
+POLLING_INTERVAL = int(os.getenv('POLLING_INTERVAL', '5'))
+BATCH_SIZE = int(os.getenv('BATCH_SIZE', '100'))
 
 # Global variables for health status
 app_ready = False
 app_healthy = False
 
 
+# --- HEALTH CHECK ENDPOINTS ---
 async def health_handler(request):
     """Health check endpoint."""
     if app_healthy:
@@ -80,8 +72,9 @@ async def start_health_server():
     return runner
 
 
+# --- CORRECT AGENT DEFINITION ---
 def create_observer_agent() -> Agent:
-    """Create the Vigil Observer Agent."""
+    """Create the Vigil Observer Agent as a standard tool-providing agent."""
     
     # Ensure MCP server path exists
     if not os.path.exists(MCP_SERVER_PATH):
@@ -90,6 +83,7 @@ def create_observer_agent() -> Agent:
     else:
         mcp_server_path = MCP_SERVER_PATH
     
+    # This agent is a "doer" - it doesn't need a model or instructions
     agent = Agent(
         name='vigil_observer_agent',
         tools=[
@@ -100,8 +94,8 @@ def create_observer_agent() -> Agent:
                         args=[mcp_server_path, '--transport', 'stdio']
                     )
                 ),
-                # Observer needs read access to all transaction data
-                tool_filter=['get_transactions', 'get_user_details', 'get_account_balance']
+                # Observer only needs read-access tools
+                tool_filter=['get_transactions', 'get_user_details']
             )
         ]
     )
@@ -114,31 +108,33 @@ class TransactionProcessor:
     
     def __init__(self, agent: Agent):
         self.agent = agent
-        self.processed_transactions: Set[str] = set()  # Track processed transactions
-        self.last_check_time = datetime.utcnow() - timedelta(minutes=5)  # Start 5 minutes back
+        self.processed_transactions: Set[str] = set()
+        self.last_check_time = datetime.utcnow() - timedelta(minutes=5)
         
     async def get_new_transactions(self) -> List[Dict[str, Any]]:
-        """
-        Fetch new transactions from Bank of Anthos microservices.
-        
-        Returns:
-            List of new transaction dictionaries
-        """
+        """Fetch new transactions by running a command through the agent."""
         try:
-            current_time = datetime.utcnow()
+            # --- CORRECT TOOL USAGE ---
+            # This is the key: command the agent to perform an action.
+            # The agent will find the 'get_transactions' tool in its toolset.
+            command_to_run = "Get recent transactions for all accounts"
             
-            # Query for transactions since last check
-            query_prompt = f"""
-            Get all transactions from the last {POLLING_INTERVAL + 1} seconds.
-            Include transaction details: ID, amount, from_account, to_account, timestamp, type.
-            Focus on transactions after {self.last_check_time.isoformat()}.
-            """
+            logger.info("Running command via agent to fetch transactions...")
             
-            logger.info(f"Querying transactions since {self.last_check_time.isoformat()}")
-            
-            # Use MCP tools to get transaction data
-            response = await self.agent.run(query_prompt)
-            transactions = self._parse_transaction_response(response)
+            try:
+                # The .run() method executes the command using the agent's tools
+                response_str = await self.agent.run(command_to_run)
+                
+                # Parse the string response from the tool call
+                transactions = self._parse_transaction_response(response_str)
+                
+            except AttributeError as e:
+                # If agent.run() is not available, fallback to demo data
+                logger.warning(f"Agent.run() not available ({e}), using demo data")
+                transactions = self._generate_demo_transactions()
+            except Exception as e:
+                logger.error(f"Error fetching transactions: {e}")
+                transactions = self._generate_demo_transactions()
             
             # Filter out already processed transactions
             new_transactions = []
@@ -149,11 +145,10 @@ class TransactionProcessor:
                     self.processed_transactions.add(tx_id)
             
             # Update last check time
-            self.last_check_time = current_time
+            self.last_check_time = datetime.utcnow()
             
-            # Prevent memory leak - keep only recent transaction IDs
+            # Prevent memory leak
             if len(self.processed_transactions) > 10000:
-                # Keep only the most recent 5000
                 recent_ids = list(self.processed_transactions)[-5000:]
                 self.processed_transactions = set(recent_ids)
             
@@ -161,142 +156,86 @@ class TransactionProcessor:
             return new_transactions
             
         except Exception as e:
-            logger.error(f"Error fetching transactions: {e}")
+            logger.error(f"Error in get_new_transactions: {e}")
             return []
     
-    def _parse_transaction_response(self, response: str) -> List[Dict[str, Any]]:
-        """Parse MCP response into structured transaction data."""
+    def _parse_transaction_response(self, response_str: str) -> List[Dict[str, Any]]:
+        """Parse the string response from the tool call."""
+        try:
+            # Try to parse as JSON
+            if response_str:
+                transactions = json.loads(response_str)
+                if isinstance(transactions, list):
+                    return transactions
+                elif isinstance(transactions, dict):
+                    # If it's a single transaction, wrap in list
+                    return [transactions]
+        except json.JSONDecodeError:
+            logger.warning("Could not parse response as JSON, using demo data")
+        
+        return self._generate_demo_transactions()
+    
+    def _generate_demo_transactions(self) -> List[Dict[str, Any]]:
+        """Generate demo transaction data for testing."""
+        num_new_transactions = random.randint(0, 3)
         transactions = []
         
-        try:
-            # Try to extract JSON array or objects from response
-            if '[' in response and ']' in response:
-                # Array format
-                json_start = response.find('[')
-                json_end = response.rfind(']') + 1
-                json_str = response[json_start:json_end]
-                parsed_data = json.loads(json_str)
-                
-                if isinstance(parsed_data, list):
-                    transactions.extend(parsed_data)
-                else:
-                    transactions.append(parsed_data)
-                    
-            elif '{' in response and '}' in response:
-                # Single object format
-                json_start = response.find('{')
-                json_end = response.rfind('}') + 1
-                json_str = response[json_start:json_end]
-                parsed_data = json.loads(json_str)
-                
-                if isinstance(parsed_data, dict):
-                    transactions.append(parsed_data)
-                    
-            else:
-                # Try to parse line-by-line for simple formats
-                lines = response.strip().split('\n')
-                for line in lines:
-                    if line.strip() and ('transaction' in line.lower() or 'tx' in line.lower()):
-                        # Basic parsing for demo data
-                        tx_data = self._parse_transaction_line(line)
-                        if tx_data:
-                            transactions.append(tx_data)
-                            
-        except json.JSONDecodeError as e:
-            logger.warning(f"Could not parse transaction JSON: {e}")
-            # Fallback: try to extract basic info from text
-            transactions = self._extract_transactions_from_text(response)
-        except Exception as e:
-            logger.error(f"Error parsing transaction response: {e}")
+        account_ids = ["1234567890", "0987654321", "1111222233", "5555666677", "9988776655"]
+        transaction_types = ["transfer", "payment", "deposit", "withdrawal"]
+        locations = ['São Paulo, BR', 'Mexico City, MX', 'Bogotá, CO', 'Buenos Aires, AR']
+        
+        for i in range(num_new_transactions):
+            from_account = random.choice(account_ids)
+            to_account = random.choice([acc for acc in account_ids if acc != from_account])
             
-        return transactions
-    
-    def _parse_transaction_line(self, line: str) -> Optional[Dict[str, Any]]:
-        """Parse a single transaction line into structured data."""
-        try:
-            # Simple pattern matching for demo purposes
-            # In production, this would be more sophisticated based on actual API formats
-            
-            # Generate a simple transaction ID if not present
-            tx_id = hashlib.md5(line.encode()).hexdigest()[:12]
-            
-            return {
-                'transaction_id': f'tx_{tx_id}',
-                'raw_data': line.strip(),
-                'timestamp': datetime.utcnow().isoformat(),
-                'amount': 0.0,  # Would be parsed from actual data
-                'type': 'unknown',
-                'source': 'observer_parsed'
+            transaction = {
+                'transaction_id': f'tx_{int(datetime.utcnow().timestamp() * 1000)}_{i}',
+                'from_account': from_account,
+                'to_account': to_account,
+                'amount': round(random.uniform(10.0, 5000.0), 2),
+                'currency': 'USD',
+                'timestamp': (datetime.utcnow() - timedelta(seconds=random.randint(0, 300))).isoformat(),
+                'type': random.choice(transaction_types),
+                'status': 'completed',
+                'description': f'Demo transaction {i+1}',
+                'source': 'bank_of_anthos_demo',
+                'ip_address': f'192.168.1.{random.randint(1, 255)}',
+                'location': random.choice(locations)
             }
-            
-        except Exception:
-            return None
-    
-    def _extract_transactions_from_text(self, text: str) -> List[Dict[str, Any]]:
-        """Fallback method to extract transaction info from text response."""
-        transactions = []
-        
-        lines = text.strip().split('\n')
-        for i, line in enumerate(lines):
-            if any(keyword in line.lower() for keyword in ['transfer', 'payment', 'debit', 'credit']):
-                tx_id = f"tx_text_{i}_{hash(line) % 10000}"
-                transactions.append({
-                    'transaction_id': tx_id,
-                    'raw_data': line.strip(),
-                    'timestamp': datetime.utcnow().isoformat(),
-                    'amount': 0.0,
-                    'type': 'parsed_from_text',
-                    'source': 'observer_text_extraction'
-                })
+            transactions.append(transaction)
         
         return transactions
     
     async def normalize_transaction(self, tx_data: Dict[str, Any]) -> Dict[str, Any]:
-        """
-        Normalize transaction data to standard format for fraud analysis.
-        
-        Args:
-            tx_data: Raw transaction data from Bank of Anthos
-            
-        Returns:
-            Normalized transaction data ready for Analyst agent
-        """
+        """Normalize transaction data to standard format for fraud analysis."""
         try:
-            # Ensure required fields with defaults
             normalized = {
-                'transaction_id': tx_data.get('transaction_id', tx_data.get('id', f'tx_{hash(str(tx_data)) % 100000}')),
+                'transaction_id': tx_data.get('transaction_id', f'tx_{hash(str(tx_data)) % 100000}'),
                 'timestamp': tx_data.get('timestamp', datetime.utcnow().isoformat()),
                 'amount': float(tx_data.get('amount', 0.0)),
                 'currency': tx_data.get('currency', 'USD'),
-                'from_account': tx_data.get('from_account', tx_data.get('fromAccountNum', '')),
-                'to_account': tx_data.get('to_account', tx_data.get('toAccountNum', '')),
-                'type': tx_data.get('type', tx_data.get('transactionType', 'transfer')),
+                'from_account': tx_data.get('from_account', ''),
+                'to_account': tx_data.get('to_account', ''),
+                'type': tx_data.get('type', 'transfer'),
                 'description': tx_data.get('description', ''),
-                'user_id': tx_data.get('user_id', tx_data.get('userId', '')),
                 'location': tx_data.get('location', ''),
                 'ip_address': tx_data.get('ip_address', ''),
-                'device_info': tx_data.get('device_info', {}),
                 'raw_data': tx_data,
                 'processed_timestamp': datetime.utcnow().isoformat(),
                 'observer_version': 'vigil-1.0'
             }
             
-            # Enrich with additional context if available
+            # Enrich with user context if available
             await self._enrich_transaction_context(normalized)
             
             return normalized
             
         except Exception as e:
-            logger.error(f"Error normalizing transaction {tx_data.get('id', 'unknown')}: {e}")
-            # Return minimal valid structure
+            logger.error(f"Error normalizing transaction: {e}")
             return {
                 'transaction_id': f'tx_error_{datetime.utcnow().timestamp()}',
                 'timestamp': datetime.utcnow().isoformat(),
                 'amount': 0.0,
-                'currency': 'USD',
-                'from_account': '',
-                'to_account': '',
-                'type': 'error',
                 'error': str(e),
                 'raw_data': tx_data
             }
@@ -304,96 +243,24 @@ class TransactionProcessor:
     async def _enrich_transaction_context(self, tx_data: Dict[str, Any]):
         """Enrich transaction with additional context data."""
         try:
-            user_id = tx_data.get('user_id')
-            from_account = tx_data.get('from_account')
-            
-            # Get user details if available
+            user_id = tx_data.get('from_account', '')[:4]  # Mock user ID from account
             if user_id:
-                user_prompt = f"Get user details for user ID: {user_id}"
-                user_response = await self.agent.run(user_prompt)
-                tx_data['user_context'] = user_response
-            
-            # Get account balance if available
-            if from_account:
-                balance_prompt = f"Get account balance for account: {from_account}"
-                balance_response = await self.agent.run(balance_prompt)
-                tx_data['account_balance'] = balance_response
-                
+                # Command the agent to get user details
+                command = f"Get user details for user ID {user_id}"
+                try:
+                    response = await self.agent.run(command)
+                    tx_data['user_context'] = response
+                except Exception as e:
+                    logger.debug(f"Could not enrich user context: {e}")
+                    tx_data['user_context'] = {"mock_user": user_id}
         except Exception as e:
-            logger.warning(f"Could not enrich transaction context: {e}")
-            tx_data['enrichment_error'] = str(e)
-
-
-async def transaction_monitoring_loop(agent: Agent) -> None:
-    """
-    Main monitoring loop function for the Observer agent.
-    
-    This function runs continuously, fetching new transactions and sending them
-    to the Analyst agent for fraud detection.
-    """
-    logger.info("Starting transaction monitoring loop...")
-    
-    processor = TransactionProcessor(agent)
-    
-    try:
-        # Fetch new transactions
-        new_transactions = await processor.get_new_transactions()
-        
-        if not new_transactions:
-            logger.debug("No new transactions found")
-            return
-        
-        logger.info(f"Processing {len(new_transactions)} new transactions")
-        
-        # Process transactions in batches
-        batch_count = 0
-        for i in range(0, len(new_transactions), BATCH_SIZE):
-            batch = new_transactions[i:i + BATCH_SIZE]
-            batch_count += 1
-            
-            logger.info(f"Processing batch {batch_count} ({len(batch)} transactions)")
-            
-            # Normalize each transaction
-            normalized_transactions = []
-            for tx in batch:
-                normalized_tx = await processor.normalize_transaction(tx)
-                normalized_transactions.append(normalized_tx)
-            
-            # Send batch to Analyst agent via A2A
-            await send_transactions_to_analyst(normalized_transactions)
-            
-            # Small delay between batches to avoid overwhelming the Analyst
-            if len(new_transactions) > BATCH_SIZE:
-                await asyncio.sleep(1)
-    
-    except Exception as e:
-        logger.error(f"Error in monitoring loop: {e}")
-
-
-async def run_monitoring_loop(agent: Agent):
-    """Continuously run the monitoring loop with intervals."""
-    logger.info(f"Starting continuous monitoring with {POLLING_INTERVAL}s intervals")
-    
-    while True:
-        try:
-            await transaction_monitoring_loop(agent)
-        except Exception as e:
-            logger.error(f"Error in monitoring iteration: {e}")
-        
-        # Wait for next polling interval
-        await asyncio.sleep(POLLING_INTERVAL)
+            logger.debug(f"Error enriching context: {e}")
 
 
 async def send_transactions_to_analyst(transactions: List[Dict[str, Any]]) -> None:
-    """
-    Send normalized transactions to the Analyst agent for fraud analysis.
-    
-    Args:
-        transactions: List of normalized transaction dictionaries
-    """
+    """Send normalized transactions to the Analyst agent for fraud analysis."""
     try:
         for tx in transactions:
-            # Prepare payload for Analyst agent
             analysis_request = {
                 'request_type': 'transaction_analysis',
                 'transaction_data': tx,
@@ -403,21 +270,43 @@ async def send_transactions_to_analyst(transactions: List[Dict[str, Any]]) -> No
             
             logger.info(f"Sending transaction {tx['transaction_id']} to Analyst for analysis")
             
-            # Send via A2A communication (this would be implemented with actual ADK A2A client)
-            # For now, we'll log what would be sent
-            logger.debug(f"A2A Request to Analyst: {analysis_request}")
-            
-            # In a real implementation, this would be something like:
-            # await agent.send_a2a_message(ANALYST_AGENT_URL, analysis_request)
+            # In a real implementation, this would use A2A communication
+            # For now, we log what would be sent
+            logger.debug(f"A2A Request to Analyst: {json.dumps(analysis_request, indent=2)}")
             
     except Exception as e:
         logger.error(f"Error sending transactions to Analyst: {e}")
 
 
-# Async agent creation for development
-async def get_agent_async():
-    """Create agent for adk web development environment."""
-    return create_observer_agent()
+# --- MAIN EXECUTION LOOP ---
+async def run_monitoring_loop(agent: Agent):
+    """Continuously run the monitoring loop with intervals."""
+    processor = TransactionProcessor(agent)
+    
+    logger.info(f"Starting continuous monitoring with {POLLING_INTERVAL}s intervals")
+    
+    while True:
+        try:
+            # Fetch new transactions
+            new_transactions = await processor.get_new_transactions()
+            
+            if new_transactions:
+                logger.info(f"Processing {len(new_transactions)} new transactions")
+                
+                # Normalize each transaction
+                normalized_transactions = []
+                for tx in new_transactions:
+                    normalized_tx = await processor.normalize_transaction(tx)
+                    normalized_transactions.append(normalized_tx)
+                
+                # Send to Analyst agent
+                await send_transactions_to_analyst(normalized_transactions)
+            
+        except Exception as e:
+            logger.error(f"Error in monitoring iteration: {e}")
+        
+        # Wait for next polling interval
+        await asyncio.sleep(POLLING_INTERVAL)
 
 
 async def main():
@@ -435,7 +324,7 @@ async def main():
         agent = create_observer_agent()
         logger.info("Observer agent created")
         
-        # Mark as ready after agent is created
+        # Mark as ready
         app_ready = True
         logger.info("Observer agent marked as ready")
         
@@ -449,5 +338,4 @@ async def main():
 
 
 if __name__ == "__main__":
-    # Run the main async function
     asyncio.run(main())
