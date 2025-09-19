@@ -21,17 +21,20 @@ spec:
     spec:
       containers:
       - name: observer-agent
-        image: gcr.io/vigil-demo-hackathon/vigil-observer-agent:latest
+        image: vigil-observer:latest
+        imagePullPolicy: Never
         ports:
         - containerPort: 8000
           name: a2a-port
         env:
         - name: MCP_SERVER_PATH
-          value: "/app/vigil_mcp_lowlevel.py"
+          value: "/app/vigil_mcp_server.py"
         - name: OBSERVER_PORT
           value: "8000"
         - name: ANALYST_AGENT_URL
           value: "http://vigil-analyst:8001"
+        - name: BANK_BASE_URL
+          value: "http://userservice:8080"
         - name: POLLING_INTERVAL
           valueFrom:
             configMapKeyRef:
@@ -55,11 +58,11 @@ spec:
           value: "http://userservice:8080"
         resources:
           requests:
-            memory: "64Mi"
-            cpu: "50m"
-          limits:
             memory: "256Mi"
-            cpu: "200m"
+            cpu: "100m"
+          limits:
+            memory: "512Mi"
+            cpu: "500m"
         livenessProbe:
           httpGet:
             path: /health
@@ -75,8 +78,25 @@ spec:
         volumeMounts:
         - name: logs-volume
           mountPath: /app/logs
+        - name: tmp
+          mountPath: /tmp
+      # Note: MCP server sidecar is removed as it will be launched by the observer agent
+      # via stdio subprocess. This ensures proper stdio communication between them.
+      # The observer agent container will start the MCP server as a child process.
+        resources:
+          requests:
+            memory: "128Mi"
+            cpu: "50m"
+          limits:
+            memory: "256Mi"
+            cpu: "250m"
+        volumeMounts:
+        - name: tmp
+          mountPath: /tmp
       volumes:
       - name: logs-volume
+        emptyDir: {}
+      - name: tmp
         emptyDir: {}
       restartPolicy: Always
 ---

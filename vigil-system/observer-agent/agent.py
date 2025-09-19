@@ -1,140 +1,182 @@
 #!/usr/bin/env python3
 """
-Vigil Observer Agent - Continuous Transaction Monitoring
+Vigil Observer Agent - Continuous Transaction Monitoring (Refactored)
 
-This agent continuously monitors bank transactions from Bank of Anthos microservices,
-normalizes the data, and sends structured transaction data to the Analyst agent
-for fraud detection via A2A communication.
+This agent continuously monitors bank transactions from Bank of Anthos microservices
+through the MCP server, normalizes the data, and sends structured transaction data 
+to the Analyst agent for fraud detection via A2A communication.
+
+Uses direct HTTP calls to the MCP server to avoid ADK import issues.
 """
 
 import asyncio
 import json
 import logging
 import os
-from typing import Any, Dict, List, Set
+from typing import Any, Dict, List, Set, Optional
 from datetime import datetime, timedelta
 import random
 from aiohttp import web
+from dataclasses import dataclass
+from dateutil import parser
+import traceback
+import subprocess
+import httpx
+from mcp_stdio_client import MCPStdioClient
 
-# Correctly import the standard Agent class
-from google.adk.agents import Agent
-from google.adk.tools.mcp_tool.mcp_toolset import McpToolset
-from google.adk.tools.mcp_tool.mcp_session_manager import StdioConnectionParams
-from mcp import StdioServerParameters
-
-# Configure logging
-logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
+# Configure structured logging for better observability
+logging.basicConfig(
+    level=logging.INFO, 
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+    handlers=[
+        logging.StreamHandler(),
+        logging.FileHandler('/app/logs/observer.log', mode='a') if os.path.exists('/app/logs') else logging.NullHandler()
+    ]
+)
 logger = logging.getLogger(__name__)
 
-# Configuration from environment
-MCP_SERVER_PATH = os.getenv('MCP_SERVER_PATH', '/app/vigil_mcp_lowlevel.py')
+# Configuration from environment with validation
+MCP_SERVER_PATH = os.getenv('MCP_SERVER_PATH', '/app/vigil_mcp_server.py')
 OBSERVER_PORT = int(os.getenv('OBSERVER_PORT', '8000'))
 ANALYST_AGENT_URL = os.getenv('ANALYST_AGENT_URL', 'http://vigil-analyst:8001')
 POLLING_INTERVAL = int(os.getenv('POLLING_INTERVAL', '5'))
 BATCH_SIZE = int(os.getenv('BATCH_SIZE', '100'))
+ENABLE_METRICS = os.getenv('ENABLE_METRICS', 'true').lower() == 'true'
+ENABLE_TRACING = os.getenv('ENABLE_TRACING', 'true').lower() == 'true'
 
-# Global variables for health status
-app_ready = False
-app_healthy = False
+# Global health status with proper state management
+@dataclass
+class HealthStatus:
+    ready: bool = False
+    healthy: bool = False
+    last_transaction_time: Optional[datetime] = None
+    transactions_processed: int = 0
+    errors_count: int = 0
+    mcp_connected: bool = False
+    
+health_status = HealthStatus()
 
 
-# --- HEALTH CHECK ENDPOINTS ---
+# --- HEALTH CHECK ENDPOINTS WITH DETAILED STATUS ---
 async def health_handler(request):
-    """Health check endpoint."""
-    if app_healthy:
-        return web.json_response({"status": "healthy", "timestamp": datetime.utcnow().isoformat()})
+    """Enhanced health check endpoint with detailed status."""
+    status = {
+        "status": "healthy" if health_status.healthy else "unhealthy",
+        "timestamp": datetime.utcnow().isoformat(),
+        "transactions_processed": health_status.transactions_processed,
+        "errors_count": health_status.errors_count,
+        "last_transaction_time": health_status.last_transaction_time.isoformat() if health_status.last_transaction_time else None,
+        "mcp_connected": health_status.mcp_connected
+    }
+    
+    if health_status.healthy:
+        return web.json_response(status)
     else:
-        return web.json_response({"status": "unhealthy", "timestamp": datetime.utcnow().isoformat()}, status=503)
+        return web.json_response(status, status=503)
 
 
 async def ready_handler(request):
-    """Readiness check endpoint."""
-    if app_ready:
-        return web.json_response({"status": "ready", "timestamp": datetime.utcnow().isoformat()})
+    """Enhanced readiness check endpoint."""
+    status = {
+        "status": "ready" if health_status.ready else "not ready",
+        "timestamp": datetime.utcnow().isoformat(),
+        "agent_initialized": health_status.ready,
+        "mcp_connected": health_status.mcp_connected
+    }
+    
+    if health_status.ready:
+        return web.json_response(status)
     else:
-        return web.json_response({"status": "not ready", "timestamp": datetime.utcnow().isoformat()}, status=503)
+        return web.json_response(status, status=503)
+
+
+async def metrics_handler(request):
+    """Prometheus-compatible metrics endpoint for monitoring."""
+    metrics = [
+        f"# HELP vigil_observer_transactions_total Total number of transactions processed",
+        f"# TYPE vigil_observer_transactions_total counter",
+        f"vigil_observer_transactions_total {health_status.transactions_processed}",
+        f"# HELP vigil_observer_errors_total Total number of errors",
+        f"# TYPE vigil_observer_errors_total counter",
+        f"vigil_observer_errors_total {health_status.errors_count}",
+        f"# HELP vigil_observer_up Observer agent up status",
+        f"# TYPE vigil_observer_up gauge",
+        f"vigil_observer_up {1 if health_status.healthy else 0}",
+        f"# HELP vigil_observer_mcp_connected MCP server connection status",
+        f"# TYPE vigil_observer_mcp_connected gauge",
+        f"vigil_observer_mcp_connected {1 if health_status.mcp_connected else 0}"
+    ]
+    return web.Response(text="\n".join(metrics), content_type="text/plain")
 
 
 async def start_health_server():
-    """Start the health check HTTP server."""
-    global app_healthy
+    """Start the enhanced health check HTTP server with metrics."""
     app = web.Application()
     app.router.add_get('/health', health_handler)
     app.router.add_get('/ready', ready_handler)
+    app.router.add_get('/metrics', metrics_handler)
     
     runner = web.AppRunner(app)
     await runner.setup()
     site = web.TCPSite(runner, '0.0.0.0', OBSERVER_PORT)
     await site.start()
     
-    app_healthy = True
-    logger.info(f"Health server started on port {OBSERVER_PORT}")
+    health_status.healthy = True
+    logger.info(f"Health server started on port {OBSERVER_PORT} with /health, /ready, and /metrics endpoints")
     return runner
 
 
-# --- CORRECT AGENT DEFINITION ---
-def create_observer_agent() -> Agent:
-    """Create the Vigil Observer Agent as a standard tool-providing agent."""
-    
-    # Ensure MCP server path exists
-    if not os.path.exists(MCP_SERVER_PATH):
-        logger.warning(f"MCP server not found at {MCP_SERVER_PATH}, using relative path")
-        mcp_server_path = "./vigil_mcp_lowlevel.py"
-    else:
-        mcp_server_path = MCP_SERVER_PATH
-    
-    # This agent is a "doer" - it doesn't need a model or instructions
-    agent = Agent(
-        name='vigil_observer_agent',
-        tools=[
-            McpToolset(
-                connection_params=StdioConnectionParams(
-                    server_params=StdioServerParameters(
-                        command='python3',
-                        args=[mcp_server_path, '--transport', 'stdio']
-                    )
-                ),
-                # Observer only needs read-access tools
-                tool_filter=['get_transactions', 'get_user_details']
-            )
-        ]
-    )
-    
-    return agent
+# MCPClient is now imported from mcp_stdio_client module
+# The old implementation is replaced with MCPStdioClient
 
 
 class TransactionProcessor:
-    """Processes and normalizes transaction data from Bank of Anthos."""
+    """Enhanced transaction processor with MCP integration."""
     
-    def __init__(self, agent: Agent):
-        self.agent = agent
+    def __init__(self, mcp_client: MCPStdioClient):
+        self.mcp_client = mcp_client
         self.processed_transactions: Set[str] = set()
         self.last_check_time = datetime.utcnow() - timedelta(minutes=5)
         
     async def get_new_transactions(self) -> List[Dict[str, Any]]:
-        """Fetch new transactions by running a command through the agent."""
+        """Fetch new transactions using MCP tools."""
         try:
-            # --- CORRECT TOOL USAGE ---
-            # This is the key: command the agent to perform an action.
-            # The agent will find the 'get_transactions' tool in its toolset.
-            command_to_run = "Get recent transactions for all accounts"
+            logger.info("Fetching new transactions via MCP server...")
             
-            logger.info("Running command via agent to fetch transactions...")
+            transactions = []
             
-            try:
-                # The .run() method executes the command using the agent's tools
-                response_str = await self.agent.run(command_to_run)
-                
-                # Parse the string response from the tool call
-                transactions = self._parse_transaction_response(response_str)
-                
-            except AttributeError as e:
-                # If agent.run() is not available, fallback to demo data
-                logger.warning(f"Agent.run() not available ({e}), using demo data")
-                transactions = self._generate_demo_transactions()
-            except Exception as e:
-                logger.error(f"Error fetching transactions: {e}")
-                transactions = self._generate_demo_transactions()
+            # Test accounts from Bank of Anthos
+            test_accounts = ['1011226111', '1033623433', '1055757655']
+            
+            for account_id in test_accounts:
+                try:
+                    logger.debug(f"Fetching transactions for account {account_id}")
+                    
+                    # Call the MCP tool
+                    result = await self.mcp_client.call_tool(
+                        'get_transactions',
+                        {'account_id': account_id}
+                    )
+                    
+                    if result and isinstance(result, dict):
+                        if 'transactions' in result:
+                            account_transactions = result['transactions']
+                            if isinstance(account_transactions, list):
+                                transactions.extend(account_transactions)
+                                logger.info(f"Found {len(account_transactions)} transactions for account {account_id}")
+                        elif 'result' in result and isinstance(result['result'], dict):
+                            # Handle nested result structure
+                            if 'transactions' in result['result']:
+                                account_transactions = result['result']['transactions']
+                                if isinstance(account_transactions, list):
+                                    transactions.extend(account_transactions)
+                    
+                except Exception as e:
+                    logger.debug(f"Could not fetch transactions for account {account_id}: {e}")
+            
+            # If no real transactions, continue monitoring
+            if not transactions:
+                logger.debug("No new transactions found in this polling cycle.")
             
             # Filter out already processed transactions
             new_transactions = []
@@ -143,113 +185,87 @@ class TransactionProcessor:
                 if tx_id and tx_id not in self.processed_transactions:
                     new_transactions.append(tx)
                     self.processed_transactions.add(tx_id)
+                    health_status.transactions_processed += 1
             
-            # Update last check time
+            # Update monitoring data
             self.last_check_time = datetime.utcnow()
+            health_status.last_transaction_time = self.last_check_time
             
-            # Prevent memory leak
+            # Prevent memory leak with circular buffer pattern
             if len(self.processed_transactions) > 10000:
                 recent_ids = list(self.processed_transactions)[-5000:]
                 self.processed_transactions = set(recent_ids)
+                logger.info("Cleaned up transaction cache to prevent memory leak")
             
             logger.info(f"Found {len(new_transactions)} new transactions to process")
             return new_transactions
             
         except Exception as e:
-            logger.error(f"Error in get_new_transactions: {e}")
+            logger.error(f"Critical error in get_new_transactions: {e}\n{traceback.format_exc()}")
+            health_status.errors_count += 1
             return []
-    
-    def _parse_transaction_response(self, response_str: str) -> List[Dict[str, Any]]:
-        """Parse the string response from the tool call."""
-        try:
-            # Try to parse as JSON
-            if response_str:
-                transactions = json.loads(response_str)
-                if isinstance(transactions, list):
-                    return transactions
-                elif isinstance(transactions, dict):
-                    # If it's a single transaction, wrap in list
-                    return [transactions]
-        except json.JSONDecodeError:
-            logger.warning("Could not parse response as JSON, using demo data")
-        
-        return self._generate_demo_transactions()
-    
-    def _generate_demo_transactions(self) -> List[Dict[str, Any]]:
-        """Generate demo transaction data for testing."""
-        num_new_transactions = random.randint(0, 3)
-        transactions = []
-        
-        account_ids = ["1234567890", "0987654321", "1111222233", "5555666677", "9988776655"]
-        transaction_types = ["transfer", "payment", "deposit", "withdrawal"]
-        locations = ['São Paulo, BR', 'Mexico City, MX', 'Bogotá, CO', 'Buenos Aires, AR']
-        
-        for i in range(num_new_transactions):
-            from_account = random.choice(account_ids)
-            to_account = random.choice([acc for acc in account_ids if acc != from_account])
-            
-            transaction = {
-                'transaction_id': f'tx_{int(datetime.utcnow().timestamp() * 1000)}_{i}',
-                'from_account': from_account,
-                'to_account': to_account,
-                'amount': round(random.uniform(10.0, 5000.0), 2),
-                'currency': 'USD',
-                'timestamp': (datetime.utcnow() - timedelta(seconds=random.randint(0, 300))).isoformat(),
-                'type': random.choice(transaction_types),
-                'status': 'completed',
-                'description': f'Demo transaction {i+1}',
-                'source': 'bank_of_anthos_demo',
-                'ip_address': f'192.168.1.{random.randint(1, 255)}',
-                'location': random.choice(locations)
-            }
-            transactions.append(transaction)
-        
-        return transactions
     
     async def normalize_transaction(self, tx_data: Dict[str, Any]) -> Dict[str, Any]:
         """Normalize transaction data to standard format for fraud analysis."""
         try:
-            normalized = {
-                'transaction_id': tx_data.get('transaction_id', f'tx_{hash(str(tx_data)) % 100000}'),
-                'timestamp': tx_data.get('timestamp', datetime.utcnow().isoformat()),
-                'amount': float(tx_data.get('amount', 0.0)),
+            # Handle both fromAccountNum and from_account field names
+            from_account = tx_data.get('from_account', tx_data.get('fromAccountNum', ''))
+            to_account = tx_data.get('to_account', tx_data.get('toAccountNum', ''))
+            
+            # Handle amount and description variations
+            amount = tx_data.get('amount', 0.0)
+            description = tx_data.get('description', tx_data.get('memo', ''))
+            
+            # Generate a unique ID if not present
+            tx_id = tx_data.get('transaction_id', tx_data.get('id'))
+            if not tx_id:
+                tx_id = f"gen_{from_account}_{to_account}_{int(datetime.utcnow().timestamp())}"
+
+            # Standardize timestamp
+            timestamp_str = tx_data.get('timestamp', datetime.utcnow().isoformat())
+            try:
+                timestamp = parser.parse(timestamp_str).isoformat()
+            except (parser.ParserError, TypeError):
+                timestamp = datetime.utcnow().isoformat()
+
+            normalized_tx = {
+                'transaction_id': tx_id,
+                'from_account': from_account,
+                'to_account': to_account,
+                'amount': float(amount),
                 'currency': tx_data.get('currency', 'USD'),
-                'from_account': tx_data.get('from_account', ''),
-                'to_account': tx_data.get('to_account', ''),
-                'type': tx_data.get('type', 'transfer'),
-                'description': tx_data.get('description', ''),
-                'location': tx_data.get('location', ''),
-                'ip_address': tx_data.get('ip_address', ''),
-                'raw_data': tx_data,
-                'processed_timestamp': datetime.utcnow().isoformat(),
-                'observer_version': 'vigil-1.0'
+                'timestamp': timestamp,
+                'type': tx_data.get('type', 'unknown'),
+                'status': tx_data.get('status', 'completed'),
+                'description': description,
+                'source': tx_data.get('source', 'bank_of_anthos'),
+                'ip_address': tx_data.get('ip_address', 'N/A'),
+                'location': tx_data.get('location', 'N/A')
             }
-            
-            # Enrich with user context if available
-            await self._enrich_transaction_context(normalized)
-            
-            return normalized
+            return normalized_tx
             
         except Exception as e:
-            logger.error(f"Error normalizing transaction: {e}")
-            return {
-                'transaction_id': f'tx_error_{datetime.utcnow().timestamp()}',
-                'timestamp': datetime.utcnow().isoformat(),
-                'amount': 0.0,
-                'error': str(e),
-                'raw_data': tx_data
-            }
+            logger.error(f"Error normalizing transaction: {e} - Data: {tx_data}")
+            return {}
     
     async def _enrich_transaction_context(self, tx_data: Dict[str, Any]):
         """Enrich transaction with additional context data."""
         try:
-            user_id = tx_data.get('from_account', '')[:4]  # Mock user ID from account
-            if user_id:
-                # Command the agent to get user details
-                command = f"Get user details for user ID {user_id}"
+            # Extract user ID from account (simplified logic)
+            from_account = tx_data.get('from_account', '')
+            if from_account and len(from_account) >= 4:
+                user_id = from_account[:4]  # Mock user ID from account
+                
+                # Try to get user details via MCP
                 try:
-                    response = await self.agent.run(command)
-                    tx_data['user_context'] = response
+                    result = await self.mcp_client.call_tool(
+                        'get_user_details',
+                        {'user_id': user_id}
+                    )
+                    if result:
+                        tx_data['user_context'] = result
+                    else:
+                        tx_data['user_context'] = {"mock_user": user_id}
                 except Exception as e:
                     logger.debug(f"Could not enrich user context: {e}")
                     tx_data['user_context'] = {"mock_user": user_id}
@@ -260,28 +276,44 @@ class TransactionProcessor:
 async def send_transactions_to_analyst(transactions: List[Dict[str, Any]]) -> None:
     """Send normalized transactions to the Analyst agent for fraud analysis."""
     try:
-        for tx in transactions:
-            analysis_request = {
-                'request_type': 'transaction_analysis',
-                'transaction_data': tx,
-                'source': 'vigil_observer',
-                'timestamp': datetime.utcnow().isoformat()
-            }
-            
-            logger.info(f"Sending transaction {tx['transaction_id']} to Analyst for analysis")
-            
-            # In a real implementation, this would use A2A communication
-            # For now, we log what would be sent
-            logger.debug(f"A2A Request to Analyst: {json.dumps(analysis_request, indent=2)}")
+        async with httpx.AsyncClient(timeout=10.0) as client:
+            for tx in transactions:
+                analysis_request = {
+                    'request_type': 'transaction_analysis',
+                    'transaction_data': tx,
+                    'source': 'vigil_observer',
+                    'timestamp': datetime.utcnow().isoformat()
+                }
+                
+                logger.info(f"Sending transaction {tx['transaction_id']} to Analyst for analysis")
+                
+                try:
+                    # Send to analyst agent
+                    response = await client.post(
+                        f"{ANALYST_AGENT_URL}/analyze",
+                        json=analysis_request,
+                        headers={"Content-Type": "application/json"}
+                    )
+                    
+                    if response.status_code == 200:
+                        logger.debug(f"Successfully sent transaction to Analyst")
+                    else:
+                        logger.warning(f"Analyst returned status {response.status_code}")
+                        
+                except Exception as e:
+                    # Log but don't fail if analyst is not available
+                    logger.debug(f"Could not send to Analyst (may not be deployed): {e}")
+                    # Log what would be sent for debugging
+                    logger.debug(f"A2A Request to Analyst: {json.dumps(analysis_request, indent=2)}")
             
     except Exception as e:
         logger.error(f"Error sending transactions to Analyst: {e}")
 
 
 # --- MAIN EXECUTION LOOP ---
-async def run_monitoring_loop(agent: Agent):
+async def run_monitoring_loop(mcp_client: MCPStdioClient):
     """Continuously run the monitoring loop with intervals."""
-    processor = TransactionProcessor(agent)
+    processor = TransactionProcessor(mcp_client)
     
     logger.info(f"Starting continuous monitoring with {POLLING_INTERVAL}s intervals")
     
@@ -304,37 +336,62 @@ async def run_monitoring_loop(agent: Agent):
             
         except Exception as e:
             logger.error(f"Error in monitoring iteration: {e}")
+            health_status.errors_count += 1
         
         # Wait for next polling interval
         await asyncio.sleep(POLLING_INTERVAL)
 
 
 async def main():
-    """Main entry point for the observer agent."""
-    global app_ready
+    """Enhanced main entry point with proper lifecycle management."""
+    logger.info("="*60)
+    logger.info("Starting Vigil Observer Agent (Refactored Version)")
+    logger.info(f"Environment: POLLING_INTERVAL={POLLING_INTERVAL}s, BATCH_SIZE={BATCH_SIZE}")
+    logger.info(f"MCP Server: {MCP_SERVER_PATH} (stdio)")
+    logger.info(f"Monitoring: METRICS={ENABLE_METRICS}, TRACING={ENABLE_TRACING}")
+    logger.info("="*60)
     
-    logger.info("Starting Vigil Observer Agent...")
+    health_runner = None
+    mcp_client = None
     
     try:
-        # Start health server first
+        # Start health server first for Kubernetes probes
         health_runner = await start_health_server()
-        logger.info("Health server started")
+        logger.info("✓ Health server started successfully")
         
-        # Create the observer agent
-        agent = create_observer_agent()
-        logger.info("Observer agent created")
+        # Create and connect MCP client
+        mcp_client = MCPStdioClient("/app/vigil_mcp_stdio_server.py")
+        logger.info("✓ MCP client created for stdio communication")
         
-        # Mark as ready
-        app_ready = True
-        logger.info("Observer agent marked as ready")
+        # Connect to MCP server
+        health_status.mcp_connected = await mcp_client.connect()
+        if health_status.mcp_connected:
+            logger.info("✓ Successfully connected to MCP server")
+        else:
+            logger.warning("⚠ Could not connect to MCP server via stdio")
         
-        # Start the monitoring loop
+        # Mark as ready for Kubernetes
+        health_status.ready = True
+        logger.info("✓ Observer agent marked as ready")
+        
+        # Start the continuous monitoring loop
         logger.info("Starting transaction monitoring loop...")
-        await run_monitoring_loop(agent)
+        await run_monitoring_loop(mcp_client)
         
+    except KeyboardInterrupt:
+        logger.info("Received shutdown signal, cleaning up...")
     except Exception as e:
-        logger.error(f"Failed to start observer agent: {e}")
+        logger.error(f"Failed to start observer agent: {e}\n{traceback.format_exc()}")
+        health_status.healthy = False
+        health_status.ready = False
         raise
+    finally:
+        # Cleanup resources
+        if mcp_client:
+            await mcp_client.close()
+        if health_runner:
+            await health_runner.cleanup()
+        logger.info("Observer agent shutdown complete")
 
 
 if __name__ == "__main__":

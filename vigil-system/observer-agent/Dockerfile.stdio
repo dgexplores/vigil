@@ -1,0 +1,66 @@
+# Vigil Observer Agent with Stdio MCP Sidecar Support
+FROM python:3.11-slim AS base
+
+# Set working directory
+WORKDIR /app
+
+# Install system dependencies
+RUN apt-get update && apt-get install -y \
+    curl \
+    gcc \
+    g++ \
+    && rm -rf /var/lib/apt/lists/*
+
+# Copy requirements and install Python dependencies
+COPY observer-agent/requirements.txt .
+RUN pip install --no-cache-dir -r requirements.txt
+
+# Install MCP SDK if not in requirements
+RUN pip install --no-cache-dir mcp
+
+# Stage for copying MCP server files
+FROM base AS final
+
+# Copy observer agent files
+COPY observer-agent/agent.py .
+COPY observer-agent/mcp_stdio_client.py .
+COPY observer-agent/mcp_cluster_proxy.py .
+COPY shared/vigil_mcp_lowlevel.py .
+COPY shared/bank_api_client.py .
+RUN mkdir -p /app/shared && ln -s /app/bank_api_client.py /app/shared/bank_api_client.py
+
+# Copy MCP server files (these will be included in the build context)
+# The build should be run from the vigil-system directory
+COPY mcp-server/vigil_mcp_server.py .
+COPY mcp-server/vigil_mcp_stdio_server.py .
+
+# Copy any fallback/legacy MCP files if they exist
+# Note: We'll handle this through the symlink in observer-agent directory
+
+# Create directories for logs and data
+RUN mkdir -p /app/logs /app/data
+
+# Set environment variables
+ENV PYTHONPATH=/app
+ENV MCP_SERVER_PATH=/app/vigil_mcp_stdio_server.py
+ENV OBSERVER_PORT=8000
+ENV POLLING_INTERVAL=5
+ENV BATCH_SIZE=100
+
+# Environment variables for MCP server (can be overridden)
+ENV BANK_BASE_URL=http://userservice:8080
+ENV REQUEST_TIMEOUT=30
+ENV AUTH_USERNAME=testuser
+ENV AUTH_PASSWORD=bankofanthos
+ENV JWT_SECRET=secret-key-change-in-production
+ENV LOG_LEVEL=info
+
+# Expose the A2A communication port
+EXPOSE 8000
+
+# Health check
+HEALTHCHECK --interval=30s --timeout=10s --start-period=5s --retries=3 \
+    CMD curl -f http://localhost:8000/health || exit 1
+
+# Run the agent
+CMD ["python", "agent.py"]

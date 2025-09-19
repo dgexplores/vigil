@@ -1,7 +1,7 @@
 #!/bin/bash
 
 # Vigil Agent System - Build and Deployment Script
-# This script builds all three agent containers and deploys them to GKE
+# This script builds the observer agent container and MCP server, then deploys them to GKE
 
 set -e  # Exit on any error
 
@@ -13,9 +13,8 @@ REGISTRY="${REGISTRY:-gcr.io/$PROJECT_ID}"
 
 # Image tags
 TAG="${TAG:-latest}"
-ANALYST_IMAGE="$REGISTRY/vigil-analyst:$TAG"
 OBSERVER_IMAGE="$REGISTRY/vigil-observer:$TAG"
-ACTUATOR_IMAGE="$REGISTRY/vigil-actuator:$TAG"
+MCP_SERVER_IMAGE="$REGISTRY/vigil-mcp-server:$TAG"
 
 echo "🚀 Vigil Agent System Deployment"
 echo "================================="
@@ -70,17 +69,10 @@ build_images() {
     print_section "Building Docker Images"
     
     # Ensure we're in the right directory
-    if [[ ! -d "analyst-agent" || ! -d "observer-agent" || ! -d "actuator-agent" ]]; then
-        echo "❌ Agent directories not found. Make sure you're in the vigil-system directory."
+    if [[ ! -d "observer-agent" || ! -d "mcp-server" ]]; then
+        echo "❌ Required directories not found. Make sure you're in the vigil-system directory."
         exit 1
     fi
-    
-    # Build Analyst Agent
-    echo "🔨 Building Analyst Agent..."
-    cd analyst-agent
-    docker build -t $ANALYST_IMAGE .
-    echo "✅ Analyst Agent built successfully"
-    cd ..
     
     # Build Observer Agent  
     echo "🔨 Building Observer Agent..."
@@ -89,11 +81,11 @@ build_images() {
     echo "✅ Observer Agent built successfully"
     cd ..
     
-    # Build Actuator Agent
-    echo "🔨 Building Actuator Agent..."
-    cd actuator-agent
-    docker build -t $ACTUATOR_IMAGE .
-    echo "✅ Actuator Agent built successfully"
+    # Build MCP Server
+    echo "🔨 Building MCP Server..."
+    cd mcp-server
+    docker build -t $MCP_SERVER_IMAGE .
+    echo "✅ MCP Server built successfully"
     cd ..
 }
 
@@ -104,17 +96,13 @@ push_images() {
     # Configure Docker to use gcloud as credential helper
     gcloud auth configure-docker --quiet
     
-    echo "📤 Pushing Analyst Agent..."
-    docker push $ANALYST_IMAGE
-    echo "✅ Analyst Agent pushed"
-    
     echo "📤 Pushing Observer Agent..."
     docker push $OBSERVER_IMAGE
     echo "✅ Observer Agent pushed"
     
-    echo "📤 Pushing Actuator Agent..."
-    docker push $ACTUATOR_IMAGE
-    echo "✅ Actuator Agent pushed"
+    echo "📤 Pushing MCP Server..."
+    docker push $MCP_SERVER_IMAGE
+    echo "✅ MCP Server pushed"
 }
 
 # Function to set up GKE cluster (if needed)
@@ -161,22 +149,20 @@ deploy_to_k8s() {
     echo "🔄 Updating image references in deployment manifests..."
     
     # Create temporary deployment files with correct image names
-    sed "s|vigil/analyst-agent:latest|$ANALYST_IMAGE|g" k8s/analyst-deployment.yaml > k8s/analyst-deployment-temp.yaml
     sed "s|vigil/observer-agent:latest|$OBSERVER_IMAGE|g" k8s/observer-deployment.yaml > k8s/observer-deployment-temp.yaml
-    sed "s|vigil/actuator-agent:latest|$ACTUATOR_IMAGE|g" k8s/actuator-deployment.yaml > k8s/actuator-deployment-temp.yaml
+    sed "s|vigil/mcp-server:latest|$MCP_SERVER_IMAGE|g" kubernetes-manifests/mcp-server.yaml > kubernetes-manifests/mcp-server-temp.yaml
     
     # Deploy configuration to default namespace
     echo "🔧 Deploying configuration to default namespace..."
     kubectl apply -f k8s/namespace-and-config.yaml
     
-    # Deploy the agents
-    echo "🚀 Deploying Vigil agents..."
-    kubectl apply -f k8s/analyst-deployment-temp.yaml
+    # Deploy the observer agent and MCP server
+    echo "🚀 Deploying Vigil components..."
     kubectl apply -f k8s/observer-deployment-temp.yaml
-    kubectl apply -f k8s/actuator-deployment-temp.yaml
+    kubectl apply -f kubernetes-manifests/mcp-server-temp.yaml
     
     # Clean up temporary files
-    rm -f k8s/*-temp.yaml
+    rm -f k8s/*-temp.yaml kubernetes-manifests/*-temp.yaml
     
     echo "✅ Deployment manifests applied"
 }
@@ -188,9 +174,8 @@ verify_deployment() {
     echo "⏳ Waiting for deployments to be ready..."
     
     # Wait for deployments
-    kubectl wait --for=condition=available --timeout=300s deployment/vigil-analyst
     kubectl wait --for=condition=available --timeout=300s deployment/vigil-observer
-    kubectl wait --for=condition=available --timeout=300s deployment/vigil-actuator
+    kubectl wait --for=condition=available --timeout=300s deployment/mcp-server
     
     echo "✅ All deployments are ready"
     
@@ -218,16 +203,15 @@ show_info() {
     echo "  kubectl get pods -w"
     echo ""
     echo "📋 To view logs:"
-    echo "  kubectl logs -f deployment/vigil-analyst"
     echo "  kubectl logs -f deployment/vigil-observer"  
-    echo "  kubectl logs -f deployment/vigil-actuator"
+    echo "  kubectl logs -f deployment/mcp-server"
     echo ""
     echo "🔧 To update configuration:"
     echo "  kubectl edit configmap vigil-config"
     echo ""
     echo "🗑️  To clean up:"
-    echo "  kubectl delete deployment vigil-analyst vigil-observer vigil-actuator"
-    echo "  kubectl delete service vigil-analyst vigil-observer vigil-actuator"
+    echo "  kubectl delete deployment vigil-observer mcp-server"
+    echo "  kubectl delete service vigil-observer mcp-server"
     echo "  kubectl delete configmap vigil-config"
     echo "  kubectl delete secret vigil-secrets"
     echo ""
@@ -241,11 +225,10 @@ show_info() {
     
     echo "📚 System Architecture:"
     echo "  Observer Agent (Port 8000) → monitors Bank of Anthos transactions"
-    echo "  Analyst Agent (Port 8001)  → performs AI-powered fraud detection"  
-    echo "  Actuator Agent (Port 8002) → executes protective actions"
+    echo "  MCP Server (Port 8001) → provides MCP protocol interface for agent communication"
     echo ""
-    echo "🔄 A2A Communication Flow:"
-    echo "  Observer → Analyst → Actuator (when high risk detected)"
+    echo "🔄 Communication Flow:"
+    echo "  Observer → MCP Server → External MCP Clients (via port forwarding)"
 }
 
 # Main execution flow
@@ -278,8 +261,8 @@ main() {
             ;;
         "clean")
             print_section "Cleaning up Vigil system"
-            kubectl delete deployment vigil-analyst vigil-observer vigil-actuator --ignore-not-found=true
-            kubectl delete service vigil-analyst vigil-observer vigil-actuator --ignore-not-found=true
+            kubectl delete deployment vigil-observer mcp-server --ignore-not-found=true
+            kubectl delete service vigil-observer mcp-server --ignore-not-found=true
             kubectl delete configmap vigil-config --ignore-not-found=true
             kubectl delete secret vigil-secrets --ignore-not-found=true
             echo "✅ Vigil system cleaned up"

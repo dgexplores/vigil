@@ -1,12 +1,17 @@
 # Vigil Observer Agent Dependencies
 
-# Google Agent Development Kit (ADK)
-google-adk>=0.1.0
+# Google Agent Development Kit (ADK) - Core components
+google-adk>=1.0.0
 
 # MCP (Model Context Protocol) support
 mcp>=1.0.0
+fastmcp>=0.3.0  # FastMCP for server implementation
 
 # Core Python libraries
+aiohttp>=3.8.0
+httpx>=0.23.0
+python-dateutil>=2.8.0
+
 asyncio-contextmanager>=1.0.0
 typing-extensions>=4.0.0
 
@@ -16,6 +21,12 @@ httpx>=0.24.0
 
 # JSON and data handling
 pydantic>=2.0.0
+
+# JWT handling for Bank of Anthos auth
+pyjwt>=2.8.0
+
+# CLI support for MCP server
+click>=8.1.0
 
 # Logging and monitoring
 structlog>=22.0.0

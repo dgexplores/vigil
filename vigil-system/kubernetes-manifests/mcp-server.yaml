@@ -46,7 +46,7 @@ spec:
     spec:
       containers:
       - name: mcp-server
-        image: gcr.io/vigil-demo-hackathon/vigil-mcp-server-lowlevel:latest
+        image: gcr.io/vigil-demo-hackathon/vigil-mcp-server:latest
         imagePullPolicy: Always
         ports:
         - name: http

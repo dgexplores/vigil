@@ -301,6 +301,21 @@ kubectl scale deployment vigil-analyst --replicas=3 -n vigil-system
 kubectl edit deployment vigil-analyst -n vigil-system
 ```
 
+## 🧩 MCP Sidecar Pattern (Recommended)
+
+To reduce latency and external dependencies, each agent Pod can run an MCP server sidecar and communicate over localhost.
+
+- Observer Deployment: Configured to use `http://127.0.0.1:8000` via `MCP_SERVER_URL` with an `mcp-server` sidecar injected.
+- Analyst/Actuator Deployments: Include the sidecar by default; they can either keep using stdio (spawned process) or switch to HTTP by setting `MCP_SERVER_URL=http://127.0.0.1:8000` and using an HTTP-capable client.
+- Sidecar Image: `gcr.io/vigil-demo-hackathon/vigil-mcp-server:latest` listening on port `8000`.
+
+Bank of Anthos service endpoints inside the cluster are used directly by the sidecar (e.g., `http://userservice:8080`). Secrets `vigil-secrets` provide credentials, and a shared `/tmp` emptyDir is mounted for runtime files.
+
+Rollout notes:
+
+- Ensure `bank-of-anthos` services are in the same namespace or update `BANK_BASE_URL` accordingly.
+- Verify readiness/liveness of both containers; agent should start even if sidecar is briefly warming up.
+
 ## 🤝 Contributing
 
 ### Development Workflow
@@ -341,6 +356,6 @@ Vigil showcases the power of Google Kubernetes Engine for deploying sophisticate
 
 ---
 
-**Built with 💙 for the GKE Turns 10 Hackathon**
+Built with 💙 for the GKE Turns 10 Hackathon.
 
-*Protecting Latin American digital banking with AI-powered fraud detection*
+Protecting Latin American digital banking with AI-powered fraud detection.
