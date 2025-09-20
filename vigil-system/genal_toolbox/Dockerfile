@@ -1,6 +1,6 @@
 # Use the official Golang image to create a build artifact.
 # This is the "builder" stage.
-FROM golang:1.22-alpine as builder
+FROM golang:1.23-alpine as builder
 
 # Install git
 RUN apk add --no-cache git
@@ -15,7 +15,8 @@ RUN git clone https://github.com/googleapis/genai-toolbox .
 # -o /app/genal-toolbox: output the binary to /app/genal-toolbox
 # CGO_ENABLED=0: disable CGO for a statically linked binary
 # GOOS=linux: build for Linux
-RUN CGO_ENABLED=0 GOOS=linux go build -o /app/genal-toolbox .
+# GOTOOLCHAIN=auto: allow Go to download newer toolchain if needed
+RUN GOTOOLCHAIN=auto CGO_ENABLED=0 GOOS=linux go build -o /app/genal-toolbox .
 
 # Use a minimal image for the final stage
 # This is the "runner" stage.
@@ -32,5 +33,5 @@ COPY --from=builder /app/genal-toolbox .
 COPY tools.yaml .
 
 # The command to run the application
-# The actual command might be different, this is a placeholder
-CMD ["/app/genal-toolbox", "--config_file", "/app/tools.yaml"]
+# Use the correct command line argument for the tools configuration file
+CMD ["/app/genal-toolbox", "--tools-file", "/app/tools.yaml"]

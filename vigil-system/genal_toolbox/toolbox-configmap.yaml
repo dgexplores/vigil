@@ -5,52 +5,65 @@ metadata:
 data:
   tools.yaml: |
     sources:
-      - name: accounts-db
-        type: postgres
-        # Use GKE internal service DNS. This will be injected via environment variables.
-        uri: ${ACCOUNTS_DB_URL}
-      - name: ledger-db
-        type: postgres
-        # Use GKE internal service DNS. This will be injected via environment variables.
-        uri: ${LEDGER_DB_URL}
+      accounts-db:
+        kind: postgres
+        host: accounts-db
+        port: 5432
+        database: accounts-db
+        user: accounts-admin
+        password: accounts-pwd
+      ledger-db:
+        kind: postgres
+        host: ledger-db
+        port: 5432
+        database: postgresdb
+        user: admin
+        password: password
+
+    tools:
+      get_new_transactions:
+        kind: postgres-sql
+        source: ledger-db
+        description: "Retrieves all transactions that have occurred since the given timestamp."
+        statement: "SELECT transaction_id, amount, timestamp, from_account_id, to_account_id FROM transactions WHERE timestamp > $1 ORDER BY timestamp ASC;"
+        parameters:
+          - name: last_timestamp
+            type: string
+            description: "The ISO 8601 timestamp of the last transaction processed."
+
+      get_user_details_by_account:
+        kind: postgres-sql
+        source: accounts-db
+        description: "Fetches user profile information for a given account ID."
+        statement: "SELECT u.user_id, u.username, u.ext_user_id, a.account_id FROM users u JOIN accounts a ON u.ext_user_id = a.ext_user_id WHERE a.account_id = $1;"
+        parameters:
+          - name: account_id
+            type: string
+            description: "The account ID to fetch user details for."
+
+      get_user_transaction_history:
+        kind: postgres-sql
+        source: ledger-db
+        description: "Retrieves the 50 most recent transactions for a given user ID to understand their history."
+        statement: "SELECT * FROM transactions WHERE from_account_id = $1 ORDER BY timestamp DESC LIMIT 50;"
+        parameters:
+          - name: account_id
+            type: string
+            description: "The user's account ID."
+
+      lock_account:
+        kind: postgres-sql
+        source: accounts-db
+        description: "Locks a user's account to prevent further activity. This is a critical security action."
+        statement: "UPDATE users SET user_info = 'ACCOUNT_LOCKED_BY_VIGIL' WHERE ext_user_id = $1;"
+        parameters:
+          - name: ext_user_id
+            type: string
+            description: "The external user ID associated with the account to be locked."
 
     toolsets:
-      - name: vigil_tools
-        tools:
-          - name: get_new_transactions
-            source: ledger-db # <-- This tool targets the Ledger DB
-            description: "Retrieves all transactions that have occurred since the given timestamp."
-            statement: "SELECT transaction_id, amount, timestamp, from_account_id, to_account_id FROM transactions WHERE timestamp > @last_timestamp ORDER BY timestamp ASC;"
-            parameters:
-              - name: last_timestamp
-                type: string
-                description: "The ISO 8601 timestamp of the last transaction processed."
-
-          - name: get_user_details_by_account
-            source: accounts-db # <-- This tool targets the Accounts DB
-            description: "Fetches user profile information for a given account ID."
-            statement: "SELECT u.user_id, u.username, u.ext_user_id, a.account_id FROM users u JOIN accounts a ON u.ext_user_id = a.ext_user_id WHERE a.account_id = @account_id;"
-            parameters:
-              - name: account_id
-                type: string
-                description: "The account ID to fetch user details for."
-
-          - name: get_user_transaction_history
-            source: ledger-db # <-- This tool targets the Ledger DB
-            description: "Retrieves the 50 most recent transactions for a given user ID to understand their history."
-            statement: "SELECT * FROM transactions WHERE from_account_id = @account_id ORDER BY timestamp DESC LIMIT 50;"
-            parameters:
-              - name: account_id
-                type: string
-                description: "The user's account ID."
-
-          - name: lock_account
-            source: accounts-db # <-- This tool targets the Accounts DB
-            description: "Locks a user's account to prevent further activity. This is a critical security action."
-            # NOTE: The Bank of Anthos schema does not have a native 'locked' status.
-            # We simulate this by updating a user's description field.
-            statement: "UPDATE users SET user_info = 'ACCOUNT_LOCKED_BY_VIGIL' WHERE ext_user_id = @ext_user_id;"
-            parameters:
-              - name: ext_user_id
-                type: string
-                description: "The external user ID associated with the account to be locked."
+      vigil_tools:
+        - get_new_transactions
+        - get_user_details_by_account
+        - get_user_transaction_history
+        - lock_account
