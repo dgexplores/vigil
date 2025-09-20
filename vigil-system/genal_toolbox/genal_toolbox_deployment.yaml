@@ -16,15 +16,15 @@ spec:
     spec:
       containers:
       - name: genal-toolbox
-        # Replace with the actual image path
-        image: gcr.io/your-project/genal-toolbox:latest
+        # Replace with the actual image path after building and pushing
+        image: southamerica-east1-docker.pkg.dev/vigil-demo-hackathon/vigil-repo/genal-toolbox:latest
         ports:
         - containerPort: 8080
         env:
         - name: ACCOUNTS_DB_URL
-          value: "your-accounts-db-url" # This should be populated from a secret or configmap
+          value: "postgresql://admin:admin@accounts-db:5432/accounts-db"
         - name: LEDGER_DB_URL
-          value: "your-ledger-db-url" # This should be populated from a secret or configmap
+          value: "postgresql://admin:admin@ledger-db:5432/ledger-db"
         volumeMounts:
         - name: toolbox-config
           mountPath: "/app/tools.yaml"

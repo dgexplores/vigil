@@ -2,11 +2,14 @@
 # This is the "builder" stage.
 FROM golang:1.22-alpine as builder
 
+# Install git
+RUN apk add --no-cache git
+
 # Set the Current Working Directory inside the container
 WORKDIR /app
 
-# Copy the source code into the container
-COPY main.go .
+# Clone the genai-toolbox repository
+RUN git clone https://github.com/googleapis/genai-toolbox .
 
 # Build the Go app
 # -o /app/genal-toolbox: output the binary to /app/genal-toolbox
@@ -25,6 +28,7 @@ WORKDIR /app
 COPY --from=builder /app/genal-toolbox .
 
 # Copy the tools.yaml file
+# This file is expected to be in the build context.
 COPY tools.yaml .
 
 # The command to run the application

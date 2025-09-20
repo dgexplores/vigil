@@ -16,8 +16,8 @@ spec:
     spec:
       containers:
       - name: orchestrator-agent
-        # Replace with the actual image path
-        image: gcr.io/your-project/orchestrator-agent:latest
+        # Replace with the actual image path after building and pushing
+        image: southamerica-east1-docker.pkg.dev/vigil-demo-hackathon/vigil-repo/orchestrator-agent:latest
         ports:
         - containerPort: 8080
         env:
