@@ -68,3 +68,6 @@ htmlcov/
 *.db
 *.sqlite
 *.sqlite3
+
+# Application Secrets
+vigil-system/gemini-api-key-secret.yaml

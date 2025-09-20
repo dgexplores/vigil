@@ -1,0 +1,32 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: actuator-agent
+  labels:
+    app: actuator-agent
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: actuator-agent
+  template:
+    metadata:
+      labels:
+        app: actuator-agent
+    spec:
+      containers:
+      - name: actuator-agent
+        # Replace with the actual image path after building and pushing
+        image: southamerica-east1-docker.pkg.dev/vigil-demo-hackathon/vigil-repo/actuator-agent:latest
+        ports:
+        - containerPort: 8080
+        resources:
+          requests:
+            memory: "256Mi"
+            cpu: "250m"
+          limits:
+            memory: "512Mi"
+            cpu: "500m"
+        env:
+        - name: GENAL_TOOLBOX_SERVICE_URL
+          value: "http://genal-toolbox-service"

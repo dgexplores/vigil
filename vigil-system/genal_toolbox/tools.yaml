@@ -1,0 +1,63 @@
+sources:
+  accounts-db:
+    kind: postgres
+    host: accounts-db
+    port: 5432
+    database: accounts-db
+    user: admin
+    password: admin
+  ledger-db:
+    kind: postgres
+    host: ledger-db
+    port: 5432
+    database: ledger-db
+    user: admin
+    password: admin
+
+tools:
+  get_new_transactions:
+    kind: postgres-sql
+    source: ledger-db
+    description: "Retrieves all transactions that have occurred since the given timestamp."
+    statement: "SELECT transaction_id, amount, timestamp, from_account_id, to_account_id FROM transactions WHERE timestamp > $1 ORDER BY timestamp ASC;"
+    parameters:
+      - name: last_timestamp
+        type: string
+        description: "The ISO 8601 timestamp of the last transaction processed."
+
+  get_user_details_by_account:
+    kind: postgres-sql
+    source: accounts-db
+    description: "Fetches user profile information for a given account ID."
+    statement: "SELECT u.user_id, u.username, u.ext_user_id, a.account_id FROM users u JOIN accounts a ON u.ext_user_id = a.ext_user_id WHERE a.account_id = $1;"
+    parameters:
+      - name: account_id
+        type: string
+        description: "The account ID to fetch user details for."
+
+  get_user_transaction_history:
+    kind: postgres-sql
+    source: ledger-db
+    description: "Retrieves the 50 most recent transactions for a given user ID to understand their history."
+    statement: "SELECT * FROM transactions WHERE from_account_id = $1 ORDER BY timestamp DESC LIMIT 50;"
+    parameters:
+      - name: account_id
+        type: string
+        description: "The user's account ID."
+
+  lock_account:
+    kind: postgres-sql
+    source: accounts-db
+    description: "Locks a user's account to prevent further activity. This is a critical security action."
+    statement: "UPDATE users SET user_info = 'ACCOUNT_LOCKED_BY_VIGIL' WHERE ext_user_id = $1;"
+    parameters:
+      - name: ext_user_id
+        type: string
+        description: "The external user ID associated with the account to be locked."
+
+toolsets:
+  vigil_tools:
+    - get_new_transactions
+    - get_user_details_by_account
+    - get_user_transaction_history
+    - lock_account

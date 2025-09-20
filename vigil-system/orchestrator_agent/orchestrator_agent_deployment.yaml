@@ -1,0 +1,41 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: orchestrator-agent
+  labels:
+    app: orchestrator-agent
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: orchestrator-agent
+  template:
+    metadata:
+      labels:
+        app: orchestrator-agent
+    spec:
+      containers:
+      - name: orchestrator-agent
+        # Replace with the actual image path after building and pushing
+        image: southamerica-east1-docker.pkg.dev/vigil-demo-hackathon/vigil-repo/orchestrator-agent:latest
+        ports:
+        - containerPort: 8080
+        resources:
+          requests:
+            memory: "256Mi"
+            cpu: "250m"
+          limits:
+            memory: "512Mi"
+            cpu: "500m"
+        env:
+        - name: INVESTIGATION_AGENT_SERVICE_URL
+          value: "http://investigation-agent-service"
+        - name: CRITIC_AGENT_SERVICE_URL
+          value: "http://critic-agent-service"
+        - name: ACTUATOR_AGENT_SERVICE_URL
+          value: "http://actuator-agent-service"
+        - name: GEMINI_API_KEY
+          valueFrom:
+            secretKeyRef:
+              name: gemini-api-key
+              key: key
