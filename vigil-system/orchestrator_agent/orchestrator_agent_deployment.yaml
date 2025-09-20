@@ -1,0 +1,34 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: orchestrator-agent
+  labels:
+    app: orchestrator-agent
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: orchestrator-agent
+  template:
+    metadata:
+      labels:
+        app: orchestrator-agent
+    spec:
+      containers:
+      - name: orchestrator-agent
+        # Replace with the actual image path
+        image: gcr.io/your-project/orchestrator-agent:latest
+        ports:
+        - containerPort: 8080
+        env:
+        - name: INVESTIGATION_AGENT_SERVICE_URL
+          value: "http://investigation-agent-service"
+        - name: CRITIC_AGENT_SERVICE_URL
+          value: "http://critic-agent-service"
+        - name: ACTUATOR_AGENT_SERVICE_URL
+          value: "http://actuator-agent-service"
+        - name: GEMINI_API_KEY
+          valueFrom:
+            secretKeyRef:
+              name: gemini-api-key
+              key: key

@@ -1,0 +1,29 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: transaction-monitor-agent
+  labels:
+    app: transaction-monitor-agent
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: transaction-monitor-agent
+  template:
+    metadata:
+      labels:
+        app: transaction-monitor-agent
+    spec:
+      containers:
+      - name: transaction-monitor-agent
+        # Replace with the actual image path
+        image: gcr.io/your-project/transaction-monitor-agent:latest
+        env:
+        - name: GENAL_TOOLBOX_SERVICE_URL
+          value: "http://genal-toolbox-service"
+        - name: ORCHESTRATOR_SERVICE_URL
+          value: "http://orchestrator-agent-service"
+        - name: POLL_INTERVAL
+          value: "5"
+        - name: FRAUD_THRESHOLD
+          value: "1000.0"

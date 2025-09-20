@@ -1,0 +1,35 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: genal-toolbox-service
+  labels:
+    app: genal-toolbox
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: genal-toolbox
+  template:
+    metadata:
+      labels:
+        app: genal-toolbox
+    spec:
+      containers:
+      - name: genal-toolbox
+        # Replace with the actual image path
+        image: gcr.io/your-project/genal-toolbox:latest
+        ports:
+        - containerPort: 8080
+        env:
+        - name: ACCOUNTS_DB_URL
+          value: "your-accounts-db-url" # This should be populated from a secret or configmap
+        - name: LEDGER_DB_URL
+          value: "your-ledger-db-url" # This should be populated from a secret or configmap
+        volumeMounts:
+        - name: toolbox-config
+          mountPath: "/app/tools.yaml"
+          subPath: "tools.yaml"
+      volumes:
+      - name: toolbox-config
+        configMap:
+          name: toolbox-config

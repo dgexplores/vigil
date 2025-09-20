@@ -1,0 +1,25 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: actuator-agent
+  labels:
+    app: actuator-agent
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: actuator-agent
+  template:
+    metadata:
+      labels:
+        app: actuator-agent
+    spec:
+      containers:
+      - name: actuator-agent
+        # Replace with the actual image path
+        image: gcr.io/your-project/actuator-agent:latest
+        ports:
+        - containerPort: 8080
+        env:
+        - name: GENAL_TOOLBOX_SERVICE_URL
+          value: "http://genal-toolbox-service"

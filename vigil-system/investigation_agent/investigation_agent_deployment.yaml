@@ -1,0 +1,30 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: investigation-agent
+  labels:
+    app: investigation-agent
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: investigation-agent
+  template:
+    metadata:
+      labels:
+        app: investigation-agent
+    spec:
+      containers:
+      - name: investigation-agent
+        # Replace with the actual image path
+        image: gcr.io/your-project/investigation-agent:latest
+        ports:
+        - containerPort: 8080
+        env:
+        - name: GENAL_TOOLBOX_SERVICE_URL
+          value: "http://genal-toolbox-service"
+        - name: GEMINI_API_KEY
+          valueFrom:
+            secretKeyRef:
+              name: gemini-api-key
+              key: key
