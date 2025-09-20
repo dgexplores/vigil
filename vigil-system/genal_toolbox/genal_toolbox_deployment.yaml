@@ -20,6 +20,13 @@ spec:
         image: southamerica-east1-docker.pkg.dev/vigil-demo-hackathon/vigil-repo/genal-toolbox:latest
         ports:
         - containerPort: 8080
+        resources:
+          requests:
+            memory: "256Mi"
+            cpu: "250m"
+          limits:
+            memory: "512Mi"
+            cpu: "500m"
         env:
         - name: ACCOUNTS_DB_URL
           value: "postgresql://admin:admin@accounts-db:5432/accounts-db"
