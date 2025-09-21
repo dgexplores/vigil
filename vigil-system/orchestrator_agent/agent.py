@@ -138,7 +138,7 @@ class OrchestratorService:
         )
         logger.info("OrchestratorService initialized.")
 
-    def process_transaction_alert(self, transaction_data: dict) -> dict:
+    async def process_transaction_alert(self, transaction_data: dict) -> dict:
         """
         This method is called by the TransactionMonitorAgent.
         It triggers the LLM agent to start the orchestration flow.
@@ -157,7 +157,31 @@ class OrchestratorService:
             "Provide a summary of the outcome."
         )
         try:
-            final_response = self.llm_agent.send(initial_prompt)
+            # Create a proper invocation context for the ADK agent
+            from google.adk.agents.invocation_context import InvocationContext
+            from google.genai import types
+            
+            # Create the message content in proper ADK format
+            message_content = types.Content(
+                role='user',
+                parts=[types.Part(text=initial_prompt)]
+            )
+            
+            # Create invocation context
+            context = InvocationContext(
+                agent=self.llm_agent,
+                content=message_content
+            )
+            
+            # Send the context to the LLM agent and collect the response  
+            final_response_parts = []
+            async for event in self.llm_agent.run_async(context):
+                if hasattr(event, 'content') and event.content and hasattr(event.content, 'parts'):
+                    for part in event.content.parts:
+                        if hasattr(part, 'text') and part.text:
+                            final_response_parts.append(part.text)
+            
+            final_response = ''.join(final_response_parts)
             logger.info(f"Orchestration flow completed. Final response: {final_response}")
             return {"status": "completed", "summary": final_response}
         except Exception as e:
@@ -177,11 +201,14 @@ async def handle_a2a_message(request: SendMessageRequest) -> SendMessageResponse
     try:
         # Extract message text from A2A message parts
         message_text = ""
-        if hasattr(request.params, 'message') and hasattr(request.params.message, 'parts'):
-            for part in request.params.message.parts:
-                if hasattr(part, 'text'):
-                    message_text = part.text
-                    break
+        if hasattr(request, 'params') and request.params:
+            if hasattr(request.params, 'message') and request.params.message:
+                if hasattr(request.params.message, 'parts') and request.params.message.parts:
+                    for part in request.params.message.parts:
+                        # Part has a 'root' attribute containing the TextPart
+                        if hasattr(part, 'root') and hasattr(part.root, 'text'):
+                            message_text = part.root.text
+                            break
         
         logger.info(f"Received A2A message: {message_text}")
         
@@ -191,7 +218,7 @@ async def handle_a2a_message(request: SendMessageRequest) -> SendMessageResponse
             transaction_data = json.loads(transaction_json)
             
             # Process the transaction alert
-            result = orchestrator_service.process_transaction_alert(transaction_data)
+            result = await orchestrator_service.process_transaction_alert(transaction_data)
             
             # Create proper A2A response message
             response_text = TextPart(text=f"Transaction alert processed: {json.dumps(result)}")
