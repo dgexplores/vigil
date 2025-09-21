@@ -69,14 +69,24 @@ class TransactionMonitorAgent:
                 if isinstance(result, dict):
                     # Extract transaction data from various possible response formats
                     if "data" in result:
-                        return result["data"]
+                        data = result["data"]
                     elif "rows" in result:
-                        return result["rows"]
+                        data = result["rows"]
                     elif "result" in result:
-                        return result["result"]
+                        data = result["result"]
                     else:
                         # If it's already a list/array, return as is
-                        return result if isinstance(result, list) else []
+                        data = result if isinstance(result, list) else []
+                    
+                    # If data is a string, parse it as JSON
+                    if isinstance(data, str):
+                        try:
+                            data = json.loads(data)
+                        except json.JSONDecodeError as e:
+                            logger.error(f"Failed to parse JSON response from genai-toolbox: {e}")
+                            return []
+                    
+                    return data if isinstance(data, list) else []
                 elif isinstance(result, list):
                     return result
                 else:
@@ -114,8 +124,7 @@ class TransactionMonitorAgent:
                         "amount": "1500.00",  # Above fraud threshold
                         "timestamp": datetime.now(timezone.utc).isoformat(),
                         "from_account_id": "acc_123",
-                        "to_account_id": "acc_456",
-                        "recipient_id": "user_456"
+                        "to_account_id": "acc_456"
                     }
                     logger.warning(f"Simulated high-value transaction detected: {simulated_tx['transaction_id']} for amount {simulated_tx['amount']}. Alerting orchestrator.")
                     self.alert_orchestrator(simulated_tx)
@@ -157,7 +166,7 @@ class TransactionMonitorAgent:
             
             # For development - simulate orchestrator alert since it may not be fully ready
             logger.info(f"Simulating orchestrator alert for transaction: {transaction['transaction_id']}")
-            logger.info(f"Transaction details: amount={transaction.get('amount')}, recipient={transaction.get('recipient_id')}")
+            logger.info(f"Transaction details: amount={transaction.get('amount')}, to_account={transaction.get('to_account_id')}")
             
             # TODO: Replace with actual A2A call when orchestrator is fully integrated
             # self.orchestrator_client.send_request(
