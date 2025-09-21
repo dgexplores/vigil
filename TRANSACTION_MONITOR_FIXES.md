@@ -158,6 +158,8 @@ logger.info(f"Transaction details: amount={transaction.get('amount')}, to_accoun
 ```
 Bank of Anthos PostgreSQL → genai-toolbox REST API → Transaction Monitor Agent → Orchestrator Agent*
 ```
+
+\* _System check – 2025-09-21_: After redeploying the orchestrator with real A2A delegation, the monitor still logs `No response from orchestrator`. The JSON-RPC call now returns a `SendMessageResponse` where the actual payload sits in `response.root.result`, so the existing `hasattr(result, 'message')` guard never succeeds. Fix is to unwrap `response.root.result` (Message/Task) and log its contents before considering the call a failure.
 *Orchestrator integration is simulated pending A2A client configuration
 
 ## 🛠 Deployment Steps Applied

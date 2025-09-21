@@ -198,6 +198,12 @@ INFO:     Uvicorn running on http://0.0.0.0:8000
 - Compatible API calling conventions
 - Consistent error handling approaches
 
+## Post-Deployment Observations (2025-09-21)
+
+- ADK 1.14 removed the synchronous `LlmAgent.send` helper used during the refactor. Runtime logs now surface `AttributeError: 'LlmAgent' object has no attribute 'send'` whenever the investigation service attempts to analyze a transaction.
+- Impact: every orchestration cycle receives an error payload from the investigation agent, preventing downstream critic/actuator delegation.
+- Next action: drive the agent through `Runner.run_async(...)` (mirroring the orchestrator update) or adopt `await llm_agent.run_async(...)` to generate analysis results.
+
 ## Benefits Achieved
 
 1. **Improved Reliability**: Better error handling and recovery
