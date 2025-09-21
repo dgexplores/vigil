@@ -1,1 +1,2 @@
-google-adk
+requests
+a2a-sdk
