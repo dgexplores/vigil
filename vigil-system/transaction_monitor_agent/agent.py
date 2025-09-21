@@ -50,69 +50,90 @@ class TransactionMonitorAgent:
             self.process_new_transactions()
             time.sleep(POLL_INTERVAL)
 
-    def get_new_transactions_via_mcp(self, last_timestamp: str):
-        """Get new transactions via MCP call to genal-toolbox service."""
+    def get_new_transactions_via_genai_toolbox(self, last_timestamp: str):
+        """Get new transactions via genai-toolbox REST API."""
         try:
-            # Call genal-toolbox MCP server endpoint
-            url = f"{self.genal_toolbox_url}/tools/get_new_transactions/call"
-            payload = {"arguments": {"last_timestamp": last_timestamp}}
-            response = requests.post(url, json=payload, timeout=30)
+            # Call genai-toolbox using the correct REST API endpoint
+            url = f"{self.genal_toolbox_url}/api/tool/get_new_transactions/invoke"
+            
+            # REST API request payload
+            payload = {
+                "last_timestamp": last_timestamp
+            }
+            
+            response = requests.post(url, json=payload, headers={'Content-Type': 'application/json'}, timeout=30)
             
             if response.status_code == 200:
                 result = response.json()
-                return result.get("content", []) if result.get("content") else []
+                # genai-toolbox returns results in various formats, typically with data or rows
+                if isinstance(result, dict):
+                    # Extract transaction data from various possible response formats
+                    if "data" in result:
+                        return result["data"]
+                    elif "rows" in result:
+                        return result["rows"]
+                    elif "result" in result:
+                        return result["result"]
+                    else:
+                        # If it's already a list/array, return as is
+                        return result if isinstance(result, list) else []
+                elif isinstance(result, list):
+                    return result
+                else:
+                    logger.warning(f"Unexpected response format from genai-toolbox: {result}")
+                    return []
             else:
-                logger.error(f"MCP error from genal-toolbox: {response.status_code} - {response.text}")
+                result = response.json() if response.headers.get('content-type') == 'application/json' else {}
+                if "error" in result:
+                    logger.error(f"genai-toolbox API error: {result['error']}")
+                    # If it's a database schema issue, continue with simulation mode
+                    if "does not exist" in result["error"]:
+                        logger.info("Database schema issue detected, falling back to simulation mode")
+                        return []
+                else:
+                    logger.error(f"genai-toolbox HTTP error: {response.status_code} - {response.text}")
                 return []
         except Exception as e:
-            logger.error(f"Error calling genal-toolbox via MCP: {e}")
+            logger.error(f"Error calling genai-toolbox API: {e}")
             return []
 
     def process_new_transactions(self) -> None:
         """Fetches and processes new transactions."""
         logger.info(f"Fetching new transactions since {self.last_processed_timestamp}...")
         try:
-            # For development - simulate transaction data since genal-toolbox may not be fully ready
-            logger.info("Simulating transaction monitoring (genal-toolbox integration in development)")
-            
-            # Simulate finding one high-value transaction every few polls for testing
-            import random
-            if random.random() < 0.3:  # 30% chance of simulated high-value transaction
-                simulated_tx = {
-                    "transaction_id": f"sim_{int(time.time())}",
-                    "amount": "1500.00",  # Above fraud threshold
-                    "timestamp": datetime.now(timezone.utc).isoformat(),
-                    "from_account_id": "acc_123",
-                    "to_account_id": "acc_456",
-                    "recipient_id": "user_456"
-                }
-                
-                logger.warning(f"High-value transaction detected: {simulated_tx['transaction_id']} for amount {simulated_tx['amount']}. Alerting orchestrator.")
-                self.alert_orchestrator(simulated_tx)
-                
-                self.last_processed_timestamp = simulated_tx["timestamp"]
-            else:
-                logger.info("No high-value transactions detected in this poll.")
-
-            # In production, uncomment this to use actual MCP calls to genal-toolbox:
-            # transactions = self.get_new_transactions_via_mcp(self.last_processed_timestamp)
-            # 
-            # if not transactions:
-            #     logger.info("No new transactions found.")
-            #     return
-            # 
-            # logger.info(f"Found {len(transactions)} new transactions.")
-            # 
-            # latest_timestamp = self.last_processed_timestamp
-            # for tx in transactions:
-            #     if float(tx.get("amount", 0)) > FRAUD_THRESHOLD:
-            #         logger.warning(f"High-value transaction detected: {tx['transaction_id']} for amount {tx['amount']}. Alerting orchestrator.")
-            #         self.alert_orchestrator(tx)
-            # 
-            #     if tx["timestamp"] > latest_timestamp:
-            #         latest_timestamp = tx["timestamp"]
-            # 
-            # self.last_processed_timestamp = latest_timestamp
+            # Use genai-toolbox REST API to get new transactions
+            transactions = self.get_new_transactions_via_genai_toolbox(self.last_processed_timestamp)
+             
+            if not transactions:
+                logger.info("No new transactions found.")
+                # For development, still add some simulation for testing
+                import random
+                if random.random() < 0.1:  # 10% chance of simulated transaction for testing
+                    simulated_tx = {
+                        "transaction_id": f"sim_{int(time.time())}",
+                        "amount": "1500.00",  # Above fraud threshold
+                        "timestamp": datetime.now(timezone.utc).isoformat(),
+                        "from_account_id": "acc_123",
+                        "to_account_id": "acc_456",
+                        "recipient_id": "user_456"
+                    }
+                    logger.warning(f"Simulated high-value transaction detected: {simulated_tx['transaction_id']} for amount {simulated_tx['amount']}. Alerting orchestrator.")
+                    self.alert_orchestrator(simulated_tx)
+                    self.last_processed_timestamp = simulated_tx["timestamp"]
+                return
+             
+            logger.info(f"Found {len(transactions)} new transactions.")
+             
+            latest_timestamp = self.last_processed_timestamp
+            for tx in transactions:
+                if float(tx.get("amount", 0)) > FRAUD_THRESHOLD:
+                    logger.warning(f"High-value transaction detected: {tx['transaction_id']} for amount {tx['amount']}. Alerting orchestrator.")
+                    self.alert_orchestrator(tx)
+             
+                if tx["timestamp"] > latest_timestamp:
+                    latest_timestamp = tx["timestamp"]
+             
+            self.last_processed_timestamp = latest_timestamp
 
         except Exception as e:
             logger.error(f"Error processing new transactions: {e}", exc_info=True)

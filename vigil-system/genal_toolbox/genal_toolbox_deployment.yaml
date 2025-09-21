@@ -18,8 +18,10 @@ spec:
       - name: genal-toolbox
         # Replace with the actual image path after building and pushing
         image: southamerica-east1-docker.pkg.dev/vigil-demo-hackathon/vigil-repo/genal-toolbox:latest
+        command: ["/app/genal-toolbox"]
+        args: ["--tools-file", "/app/tools.yaml", "--address", "0.0.0.0", "--ui"]
         ports:
-        - containerPort: 8080
+        - containerPort: 5000
         resources:
           requests:
             memory: "256Mi"
