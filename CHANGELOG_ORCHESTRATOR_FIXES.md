@@ -1,5 +1,17 @@
 # Changelog: Orchestrator Agent CrashLoop Fixes
 
+# [2025-09-21] - feature/orchestrator-a2a-delegation
+
+### 🚀 Enhancements
+
+- **Replaced simulated delegate stubs**: Orchestrator now creates cached JSON-RPC A2A clients for investigation, critic, and actuator agents, normalizes responses, and returns structured payloads to the LLM tools.
+- **Runner-based orchestration**: Adopted ADK's `Runner` with an in-memory session service, capturing tool call/response events and stable final summaries for each transaction alert.
+
+### 🧰 Developer Notes
+
+- Helper utilities keep downstream payloads valid JSON, extract message content, and surface JSON-RPC errors, making it easier to debug end-to-end delegation.
+- Returned orchestration result includes session metadata plus the sequence of tool events, aiding transaction monitor observability.
+
 ## [2025-09-21] - Fix/deployment-issues Branch
 
 ### 🐛 Bug Fixes
