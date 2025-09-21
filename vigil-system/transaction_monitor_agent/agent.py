@@ -14,11 +14,15 @@
 
 import os
 import time
+import asyncio
 from datetime import datetime, timezone
 import logging
 import json
 import requests
-from a2a.client import ClientFactory
+from a2a.client.legacy import A2AClient
+from a2a.types import SendMessageRequest, Task, MessageSendParams, Message, TextPart, Role
+import httpx
+import uuid
 
 # Configure logging
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
@@ -43,12 +47,12 @@ class TransactionMonitorAgent:
         self.last_processed_timestamp = datetime.now(timezone.utc).isoformat()
         logger.info("TransactionMonitorAgent initialized.")
 
-    def run(self) -> None:
+    async def run(self) -> None:
         """The main loop of the agent."""
         logger.info(f"Starting transaction monitoring loop (poll interval: {POLL_INTERVAL}s)...")
         while True:
-            self.process_new_transactions()
-            time.sleep(POLL_INTERVAL)
+            await self.process_new_transactions()
+            await asyncio.sleep(POLL_INTERVAL)
 
     def get_new_transactions_via_genai_toolbox(self, last_timestamp: str):
         """Get new transactions via genai-toolbox REST API."""
@@ -107,7 +111,7 @@ class TransactionMonitorAgent:
             logger.error(f"Error calling genai-toolbox API: {e}")
             return []
 
-    def process_new_transactions(self) -> None:
+    async def process_new_transactions(self) -> None:
         """Fetches and processes new transactions."""
         logger.info(f"Fetching new transactions since {self.last_processed_timestamp}...")
         try:
@@ -127,20 +131,26 @@ class TransactionMonitorAgent:
                         "to_account_id": "acc_456"
                     }
                     logger.warning(f"Simulated high-value transaction detected: {simulated_tx['transaction_id']} for amount {simulated_tx['amount']}. Alerting orchestrator.")
-                    self.alert_orchestrator(simulated_tx)
+                    await self.alert_orchestrator(simulated_tx)
                     self.last_processed_timestamp = simulated_tx["timestamp"]
                 return
              
             logger.info(f"Found {len(transactions)} new transactions.")
              
             latest_timestamp = self.last_processed_timestamp
+            alert_tasks = []  # Collect alert tasks to run concurrently
+            
             for tx in transactions:
                 if float(tx.get("amount", 0)) > FRAUD_THRESHOLD:
                     logger.warning(f"High-value transaction detected: {tx['transaction_id']} for amount {tx['amount']}. Alerting orchestrator.")
-                    self.alert_orchestrator(tx)
+                    alert_tasks.append(self.alert_orchestrator(tx))
              
                 if tx["timestamp"] > latest_timestamp:
                     latest_timestamp = tx["timestamp"]
+             
+            # Execute all alerts concurrently
+            if alert_tasks:
+                await asyncio.gather(*alert_tasks, return_exceptions=True)
              
             self.last_processed_timestamp = latest_timestamp
 
@@ -150,42 +160,67 @@ class TransactionMonitorAgent:
     def create_orchestrator_client(self):
         """Create A2A client for orchestrator communication."""
         try:
-            # Try different A2A ClientFactory methods
-            return ClientFactory.create_jsonrpc_client(url=f"{ORCHESTRATOR_URL}")
-        except AttributeError:
-            # Fallback for different API versions
-            logger.warning("A2A ClientFactory method not found, using simulation mode")
+            # Create legacy A2A client with httpx
+            httpx_client = httpx.AsyncClient()
+            client = A2AClient(
+                httpx_client=httpx_client,
+                url=f"{ORCHESTRATOR_URL}"
+            )
+            logger.info(f"Created A2A client for orchestrator at {ORCHESTRATOR_URL}/a2a")
+            return client
+        except Exception as e:
+            logger.error(f"Failed to create A2A client: {e}")
             return None
 
-    def alert_orchestrator(self, transaction: dict) -> None:
-        """Sends a transaction alert to the orchestrator agent."""
+    async def alert_orchestrator(self, transaction: dict) -> None:
+        """Sends a transaction alert to the orchestrator agent via A2A protocol."""
         try:
             # Lazy initialization of client
             if self.orchestrator_client is None:
                 self.orchestrator_client = self.create_orchestrator_client()
             
-            # For development - simulate orchestrator alert since it may not be fully ready
-            logger.info(f"Simulating orchestrator alert for transaction: {transaction['transaction_id']}")
+            if self.orchestrator_client is None:
+                logger.warning(f"No A2A client available, skipping alert for transaction: {transaction['transaction_id']}")
+                return
+            
+            logger.info(f"Sending A2A alert for transaction: {transaction['transaction_id']}")
             logger.info(f"Transaction details: amount={transaction.get('amount')}, to_account={transaction.get('to_account_id')}")
             
-            # TODO: Replace with actual A2A call when orchestrator is fully integrated
-            # self.orchestrator_client.send_request(
-            #     "process_transaction_alert", 
-            #     transaction_data=transaction
-            # )
+            # Create properly formatted A2A message request for the orchestrator
+            text_part = TextPart(
+                text=f"Process transaction alert: {json.dumps(transaction)}"
+            )
+            message_content = Message(
+                message_id=str(uuid.uuid4()),
+                role=Role.user,
+                parts=[text_part]
+            )
+            message_params = MessageSendParams(message=message_content)
+            message_request = SendMessageRequest(
+                id=1,
+                params=message_params
+            )
             
-            logger.info(f"Successfully processed alert for transaction: {transaction['transaction_id']}")
+            # Send A2A message to orchestrator
+            result = await self.orchestrator_client.send_message(message_request)
+            
+            if result and hasattr(result, 'message'):
+                logger.info(f"Successfully sent alert for transaction: {transaction['transaction_id']}")
+                logger.info(f"Orchestrator response: {result.message}")
+            else:
+                logger.error(f"No response from orchestrator for transaction {transaction['transaction_id']}")
+                
         except Exception as e:
             logger.error(f"Failed to alert orchestrator for transaction {transaction['transaction_id']}: {e}", exc_info=True)
 
 
-def main() -> None:
+async def main() -> None:
     """Entry point for the agent."""
     try:
         agent = TransactionMonitorAgent()
-        agent.run()
+        await agent.run()
     except Exception as e:
         logger.fatal(f"Failed to start TransactionMonitorAgent: {e}", exc_info=True)
 
 if __name__ == "__main__":
-    main()
+    asyncio.run(main())

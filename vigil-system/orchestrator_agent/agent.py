@@ -16,12 +16,18 @@ import os
 import logging
 import json
 import time
+import asyncio
+import uuid
 from typing import Annotated
 
+from fastapi import FastAPI, HTTPException
+from fastapi.responses import StreamingResponse
+import uvicorn
 from google.adk.agents import LlmAgent
 from google.adk.tools import FunctionTool
 from google.adk.models import Gemini
 from a2a.client import ClientFactory
+from a2a.types import SendMessageRequest, SendMessageResponse, SendMessageSuccessResponse, Task, Message, TextPart, Role
 
 # Configure logging
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
@@ -111,6 +117,12 @@ critic_tool = FunctionTool(delegate_to_critic_agent)
 actuator_tool = FunctionTool(delegate_to_actuator_agent)
 
 
+# Create FastAPI app for A2A server functionality
+app = FastAPI(title="Orchestrator Agent A2A Server")
+
+# Global orchestrator service instance
+orchestrator_service = None
+
 class OrchestratorService:
     def __init__(self):
         logger.info("Initializing OrchestratorService...")
@@ -153,22 +165,91 @@ class OrchestratorService:
             return {"status": "error", "message": str(e)}
 
 
+# A2A FastAPI endpoints
+@app.post("/a2a/send-message")
+async def handle_a2a_message(request: SendMessageRequest) -> SendMessageResponse:
+    """Handle incoming A2A messages from other agents."""
+    global orchestrator_service
+    
+    if orchestrator_service is None:
+        raise HTTPException(status_code=500, detail="Orchestrator service not initialized")
+    
+    try:
+        # Extract message text from A2A message parts
+        message_text = ""
+        if hasattr(request.params, 'message') and hasattr(request.params.message, 'parts'):
+            for part in request.params.message.parts:
+                if hasattr(part, 'text'):
+                    message_text = part.text
+                    break
+        
+        logger.info(f"Received A2A message: {message_text}")
+        
+        # Parse the transaction data from the message
+        if "Process transaction alert:" in message_text:
+            transaction_json = message_text.replace("Process transaction alert: ", "")
+            transaction_data = json.loads(transaction_json)
+            
+            # Process the transaction alert
+            result = orchestrator_service.process_transaction_alert(transaction_data)
+            
+            # Create proper A2A response message
+            response_text = TextPart(text=f"Transaction alert processed: {json.dumps(result)}")
+            response_message = Message(
+                message_id=str(uuid.uuid4()),
+                role=Role.agent,
+                parts=[response_text]
+            )
+            
+            # Return proper A2A success response
+            success_response = SendMessageSuccessResponse(
+                id=request.id,
+                result=response_message
+            )
+            return SendMessageResponse(root=success_response)
+        else:
+            # Create proper A2A response message for unrecognized messages
+            response_text = TextPart(text="Message received but not recognized as transaction alert")
+            response_message = Message(
+                message_id=str(uuid.uuid4()),
+                role=Role.agent,
+                parts=[response_text]
+            )
+            
+            success_response = SendMessageSuccessResponse(
+                id=request.id,
+                result=response_message
+            )
+            return SendMessageResponse(root=success_response)
+            
+    except Exception as e:
+        logger.error(f"Error processing A2A message: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=f"Error processing message: {str(e)}")
+
+
+@app.post("/")
+async def handle_root_a2a_message(request: SendMessageRequest) -> SendMessageResponse:
+    """Handle A2A messages at root endpoint."""
+    return await handle_a2a_message(request)
+
+@app.get("/health")
+async def health_check():
+    """Health check endpoint."""
+    return {"status": "healthy", "service": "orchestrator_agent"}
+
+
 def main():
     """Entry point for the agent."""
     logger.info("Starting OrchestratorAgent...")
     try:
-        service = OrchestratorService()
+        global orchestrator_service
+        orchestrator_service = OrchestratorService()
         logger.info("OrchestratorAgent service created successfully")
         
-        # For now, just keep the service running and log that it's ready
-        logger.info("OrchestratorAgent is ready to receive requests")
+        # Start FastAPI A2A server
+        logger.info("Starting A2A server on port 8000...")
+        uvicorn.run(app, host="0.0.0.0", port=8000, log_level="info")
         
-        # Simple HTTP server setup would go here in a real implementation
-        # For now, just keep the process alive
-        while True:
-            time.sleep(10)
-            logger.debug("OrchestratorAgent heartbeat")
-            
     except Exception as e:
         logger.fatal(f"Failed to start OrchestratorAgent: {e}", exc_info=True)
 

@@ -1,2 +1,3 @@
 requests
 a2a-sdk
+httpx
