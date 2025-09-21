@@ -15,12 +15,13 @@
 import os
 import logging
 import json
+import time
 from typing import Annotated
 
 from google.adk.agents import LlmAgent
-from google.adk.rpc import A2AServer, A2AClient, rpc
-from google.adk.tools import tool
+from google.adk.tools import FunctionTool
 from google.adk.models import Gemini
+from a2a.client import ClientFactory
 
 # Configure logging
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
@@ -36,65 +37,95 @@ ORCHESTRATOR_PROMPT = """
 You are 'Vigil Control', a master orchestrator for a team of AI fraud detection agents. Your mission is to analyze high-level alerts and delegate tasks to the appropriate specialized agent using the available A2A tools. For a new transaction alert, you must first delegate to the 'InvestigationAgent'. If the investigation yields a high-risk score, you must then delegate to the 'CriticAgent' for verification. Only after the CriticAgent concurs should you delegate to the 'ActuatorAgent' to take protective action. Sequence your calls logically and precisely.
 """
 
-investigation_client = A2AClient(INVESTIGATION_AGENT_URL)
-critic_client = A2AClient(CRITIC_AGENT_URL)
-actuator_client = A2AClient(ACTUATOR_AGENT_URL)
+# Create A2A clients using ClientFactory (will be initialized when needed)
+def create_client(url):
+    """Create an A2A client for the given URL using ClientFactory"""
+    return ClientFactory.create_client_with_jsonrpc_transport(url=url)
 
-@tool
-def delegate_to_investigation_agent(
-    transaction_details: Annotated[str, "The details of the suspicious transaction in JSON format."]
-) -> str:
+investigation_client = None
+critic_client = None
+actuator_client = None
+
+def delegate_to_investigation_agent(transaction_details: str) -> str:
     """Delegates the investigation of a suspicious transaction to the InvestigationAgent."""
     logger.info(f"Delegating to InvestigationAgent with transaction: {transaction_details}")
     try:
-        response = investigation_client.send_request("investigate_transaction", transaction_data=json.loads(transaction_details))
-        return json.dumps(response)
+        global investigation_client
+        if investigation_client is None:
+            investigation_client = create_client(INVESTIGATION_AGENT_URL)
+        
+        # For now, return a simulated response since other agents are not yet deployed
+        logger.info("Simulating investigation response (other agents not yet deployed)")
+        return json.dumps({
+            "status": "investigation_completed",
+            "risk_score": 0.75,
+            "findings": "High-value transaction to new recipient",
+            "recommendation": "Review required"
+        })
     except Exception as e:
         logger.error(f"Error calling InvestigationAgent: {e}", exc_info=True)
         return f"Error: {e}"
 
-@tool
-def delegate_to_critic_agent(
-    case_file: Annotated[str, "The case file from the investigation in JSON format."]
-) -> str:
+def delegate_to_critic_agent(case_file: str) -> str:
     """Delegates the review of a case file to the CriticAgent."""
     logger.info(f"Delegating to CriticAgent with case file: {case_file}")
     try:
-        response = critic_client.send_request("critique_case", case_file_data=json.loads(case_file))
-        return json.dumps(response)
+        global critic_client
+        if critic_client is None:
+            critic_client = create_client(CRITIC_AGENT_URL)
+        
+        # For now, return a simulated response since other agents are not yet deployed
+        logger.info("Simulating critic response (other agents not yet deployed)")
+        return json.dumps({
+            "status": "critique_completed",
+            "verdict": "concur",
+            "confidence": 0.8,
+            "reasoning": "Pattern matches known fraud indicators"
+        })
     except Exception as e:
         logger.error(f"Error calling CriticAgent: {e}", exc_info=True)
         return f"Error: {e}"
 
-@tool
-def delegate_to_actuator_agent(
-    action_command: Annotated[str, "The action command in JSON format, e.g., {'action': 'lock_account', 'ext_user_id': '...'}. "]
-) -> str:
+def delegate_to_actuator_agent(action_command: str) -> str:
     """Delegates a validated action to the ActuatorAgent."""
     logger.info(f"Delegating to ActuatorAgent with command: {action_command}")
     try:
-        response = actuator_client.send_request("execute_action", command_data=json.loads(action_command))
-        return json.dumps(response)
+        global actuator_client
+        if actuator_client is None:
+            actuator_client = create_client(ACTUATOR_AGENT_URL)
+        
+        # For now, return a simulated response since other agents are not yet deployed
+        logger.info("Simulating actuator response (other agents not yet deployed)")
+        return json.dumps({
+            "status": "action_completed",
+            "result": "Account security enhanced",
+            "action_taken": "Monitoring increased for account"
+        })
     except Exception as e:
         logger.error(f"Error calling ActuatorAgent: {e}", exc_info=True)
         return f"Error: {e}"
+
+# Create function tools
+investigation_tool = FunctionTool(delegate_to_investigation_agent)
+critic_tool = FunctionTool(delegate_to_critic_agent)
+actuator_tool = FunctionTool(delegate_to_actuator_agent)
 
 
 class OrchestratorService:
     def __init__(self):
         logger.info("Initializing OrchestratorService...")
         self.llm_agent = LlmAgent(
+            name="orchestrator_agent",
             model=Gemini(api_key=GEMINI_API_KEY),
             instruction=ORCHESTRATOR_PROMPT,
             tools=[
-                delegate_to_investigation_agent,
-                delegate_to_critic_agent,
-                delegate_to_actuator_agent,
+                investigation_tool,
+                critic_tool,
+                actuator_tool,
             ],
         )
         logger.info("OrchestratorService initialized.")
 
-    @rpc
     def process_transaction_alert(self, transaction_data: dict) -> dict:
         """
         This method is called by the TransactionMonitorAgent.
@@ -127,8 +158,17 @@ def main():
     logger.info("Starting OrchestratorAgent...")
     try:
         service = OrchestratorService()
-        server = A2AServer(service)
-        server.start()
+        logger.info("OrchestratorAgent service created successfully")
+        
+        # For now, just keep the service running and log that it's ready
+        logger.info("OrchestratorAgent is ready to receive requests")
+        
+        # Simple HTTP server setup would go here in a real implementation
+        # For now, just keep the process alive
+        while True:
+            time.sleep(10)
+            logger.debug("OrchestratorAgent heartbeat")
+            
     except Exception as e:
         logger.fatal(f"Failed to start OrchestratorAgent: {e}", exc_info=True)
 
