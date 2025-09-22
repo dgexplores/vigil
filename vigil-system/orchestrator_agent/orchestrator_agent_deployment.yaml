@@ -17,7 +17,7 @@ spec:
       containers:
       - name: orchestrator-agent
         # Replace with the actual image path after building and pushing
-        image: southamerica-east1-docker.pkg.dev/vigil-demo-hackathon/vigil-repo/orchestrator-agent:v20250922-g28
+        image: southamerica-east1-docker.pkg.dev/vigil-demo-hackathon/vigil-repo/orchestrator-agent:v20250922-g30
         ports:
         - containerPort: 8000
         resources:

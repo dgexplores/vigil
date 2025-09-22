@@ -311,17 +311,74 @@ def _extract_account_id(case_file: Any) -> Optional[str]:
     return None
 
 
+def _maybe_extract_json_block(text: str) -> str | None:
+    """Return the first JSON object substring found in text, if any."""
+    stack: list[str] = []
+    start: int | None = None
+    for index, char in enumerate(text):
+        if char == "{":
+            if not stack:
+                start = index
+            stack.append(char)
+        elif char == "}":
+            if stack:
+                stack.pop()
+                if not stack and start is not None:
+                    return text[start : index + 1]
+    return None
+
+
+def _coerce_to_dict(raw_command: Any) -> tuple[Optional[dict[str, Any]], Optional[str]]:
+    """Best-effort conversion of LLM output into a dictionary."""
+    if isinstance(raw_command, dict):
+        return dict(raw_command), None
+
+    if not isinstance(raw_command, str):
+        return None, f"Unsupported actuator payload type: {type(raw_command)}"
+
+    text = raw_command.strip()
+    # Strip leading tokens such as "execute_action:" or fenced code blocks.
+    if text.lower().startswith("execute_action:"):
+        text = text.split(":", 1)[1].strip()
+    if text.startswith("```"):
+        parts = text.split("```", 2)
+        text = parts[1] if len(parts) > 1 else text.strip("`")
+    if text.lower().startswith("json"):
+        text = text[4:]
+    text = text.strip("`").strip()
+
+    candidates: list[str] = []
+    block = _maybe_extract_json_block(text)
+    if block:
+        candidates.append(block)
+    candidates.append(text)
+
+    sanitized_candidates: list[str] = []
+    seen: set[str] = set()
+    for candidate in candidates:
+        candidate = candidate.strip()
+        if not candidate or candidate in seen:
+            continue
+        seen.add(candidate)
+        sanitized_candidates.append(candidate)
+        if "'" in candidate and '"' not in candidate:
+            sanitized_candidates.append(candidate.replace("'", '"'))
+
+    for candidate in sanitized_candidates:
+        try:
+            return json.loads(candidate), None
+        except json.JSONDecodeError:
+            continue
+
+    logger.warning("Unable to coerce actuator payload into JSON: %s", raw_command)
+    return None, "Actuator command must be valid JSON after sanitization."
+
+
 def _prepare_actuator_payload(raw_command: Any) -> tuple[Optional[dict[str, Any]], Optional[str]]:
     """Normalize LLM-provided actuator command payload."""
-    if isinstance(raw_command, dict):
-        payload = dict(raw_command)
-    elif isinstance(raw_command, str):
-        try:
-            payload = json.loads(raw_command)
-        except json.JSONDecodeError:
-            return None, "Actuator command must be valid JSON."
-    else:
-        return None, f"Unsupported actuator payload type: {type(raw_command)}"
+    payload, error = _coerce_to_dict(raw_command)
+    if payload is None:
+        return None, error
 
     case_file = payload.get("case_file")
     if case_file is None and _latest_case_file is not None:
@@ -591,9 +648,80 @@ class OrchestratorService:
         if account_id is None:
             account_id = _extract_account_id(case_file)
 
-        should_actuate = False
+        actuator_result_success = False
         if isinstance(actuator_result, dict):
-            should_actuate = not actuator_result.get("error")
+            actuator_result_success = not actuator_result.get("error")
+        should_actuate = actuator_result_success
+
+        fallback_invoked = False
+        fallback_error: Optional[str] = None
+
+        if (
+            risk_score is not None
+            and risk_score >= self.risk_threshold
+            and not actuator_result_success
+        ):
+            fallback_account_id = account_id or ext_user_id
+            if not fallback_account_id:
+                fallback_error = (
+                    "Unable to auto-actuate: missing account identifier in investigation result."
+                )
+                logger.error(
+                    "Fallback actuation skipped for session %s: missing account ID.",
+                    session_id,
+                )
+            else:
+                fallback_payload: dict[str, Any] = {
+                    "action": "lock_account",
+                    "account_id": fallback_account_id,
+                    "reason": (
+                        f"Automatic fallback: risk score {risk_score:.2f} on transaction "
+                        f"{transaction_data.get('transaction_id')}"
+                    ),
+                    "case_file": case_file,
+                }
+                if ext_user_id:
+                    fallback_payload["ext_user_id"] = ext_user_id
+
+                tool_events.append(
+                    {
+                        "event": "call",
+                        "tool": "ActuatorAgent",
+                        "args": fallback_payload,
+                        "note": "auto_fallback",
+                    }
+                )
+                fallback_response = await delegate_to_actuator_agent(fallback_payload)
+                tool_events.append(
+                    {
+                        "event": "response",
+                        "tool": "ActuatorAgent",
+                        "response": fallback_response,
+                        "note": "auto_fallback",
+                    }
+                )
+
+                fallback_invoked = True
+                actuator_result = fallback_response
+                actuator_result_success = (
+                    isinstance(fallback_response, dict)
+                    and not fallback_response.get("error")
+                )
+                should_actuate = actuator_result_success
+
+                if actuator_result_success:
+                    logger.info(
+                        "Fallback actuator invocation succeeded for session %s (user %s).",
+                        session_id,
+                        user_id,
+                    )
+                else:
+                    fallback_error = str(fallback_response)
+                    logger.error(
+                        "Fallback actuator invocation failed for session %s: %s",
+                        session_id,
+                        fallback_response,
+                    )
 
         if justification and justification not in summary:
             summary = f"{summary}\nJustification: {justification}"
@@ -611,6 +739,14 @@ class OrchestratorService:
                     "Actuation executed even though risk score %.2f is below threshold %.2f.",
                     risk_score,
                     self.risk_threshold,
+                )
+            if fallback_invoked and actuator_result_success:
+                summary = (
+                    f"{summary}\nAutomatic fallback actuation executed (risk score {risk_score:.2f})."
+                )
+            elif fallback_error:
+                summary = (
+                    f"{summary}\nAutomatic fallback actuation failed: {fallback_error}."
                 )
 
         logger.info(
