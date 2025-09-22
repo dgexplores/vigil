@@ -1,5 +1,33 @@
 # Changelog: Orchestrator Agent CrashLoop Fixes
 
+# [2025-09-22] - cluster-validation-remediations
+
+### ✅ Fixes & Enhancements
+
+- **CriticAgent modernization**: Ported the critic service to the shared ADK `Runner` + in-memory session pattern so it streams Gemini responses, removing the deprecated `LlmAgent.send` call that was crashing every high-risk review.
+- **Critic verdict parsing**: Hardened JSON extraction so stray model narration no longer breaks `'verdict'` parsing, keeping critic responses reliable.
+- **Resilient orchestration alerts**: Lifted the transaction monitor's A2A HTTP timeout to 60s to accommodate multi-hop orchestration cycles. This reduces the JSON-RPC timeout spikes observed under load.
+- **GenAI toolbox schema fix**: Updated `get_user_details_by_account` SQL to match the Bank of Anthos `users` table (`accountid`) so investigation agents receive real profile metadata instead of 400 errors.
+- **Ledger query alignment**: Adjusted transaction history and new-transaction queries to use canonical `from_acct` / `to_acct` columns exposed by the Bank of Anthos ledger.
+- **Operational record**: Added `docs/VIGIL_CLUSTER_VALIDATION_2025-09-22.md` summarizing the live cluster evaluation, log evidence, and agreed next actions.
+
+### 📋 Deployment Notes
+
+- Requires rebuilding and redeploying critic, transaction monitor, and genai-toolbox images/config to pick up the changes.
+- After rollout, re-run the manual A2A smoke test to confirm ActuatorAgent hand-offs complete with the restored critic verdicts.
+
+# [2025-09-21] - feature/orchestrator-a2a-delegation
+
+### 🚀 Enhancements
+
+- **Replaced simulated delegate stubs**: Orchestrator now creates cached JSON-RPC A2A clients for investigation, critic, and actuator agents, normalizes responses, and returns structured payloads to the LLM tools.
+- **Runner-based orchestration**: Adopted ADK's `Runner` with an in-memory session service, capturing tool call/response events and stable final summaries for each transaction alert.
+
+### 🧰 Developer Notes
+
+- Helper utilities keep downstream payloads valid JSON, extract message content, and surface JSON-RPC errors, making it easier to debug end-to-end delegation.
+- Returned orchestration result includes session metadata plus the sequence of tool events, aiding transaction monitor observability.
+
 ## [2025-09-21] - Fix/deployment-issues Branch
 
 ### 🐛 Bug Fixes

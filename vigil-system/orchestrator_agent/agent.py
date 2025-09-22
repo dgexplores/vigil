@@ -15,19 +15,31 @@
 import os
 import logging
 import json
-import time
 import asyncio
 import uuid
-from typing import Annotated
+from typing import Any
 
 from fastapi import FastAPI, HTTPException
-from fastapi.responses import StreamingResponse
 import uvicorn
 from google.adk.agents import LlmAgent
 from google.adk.tools import FunctionTool
 from google.adk.models import Gemini
-from a2a.client import ClientFactory
-from a2a.types import SendMessageRequest, SendMessageResponse, SendMessageSuccessResponse, Task, Message, TextPart, Role
+from google.genai import types
+from google.adk.sessions.in_memory_session_service import InMemorySessionService
+from google.adk.runners import Runner
+import httpx
+from a2a.client.legacy import A2AClient
+from a2a.types import (
+    JSONRPCErrorResponse,
+    Message,
+    MessageSendParams,
+    Role,
+    SendMessageRequest,
+    SendMessageResponse,
+    SendMessageSuccessResponse,
+    Task,
+    TextPart,
+)
 
 # Configure logging
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
@@ -43,73 +55,200 @@ ORCHESTRATOR_PROMPT = """
 You are 'Vigil Control', a master orchestrator for a team of AI fraud detection agents. Your mission is to analyze high-level alerts and delegate tasks to the appropriate specialized agent using the available A2A tools. For a new transaction alert, you must first delegate to the 'InvestigationAgent'. If the investigation yields a high-risk score, you must then delegate to the 'CriticAgent' for verification. Only after the CriticAgent concurs should you delegate to the 'ActuatorAgent' to take protective action. Sequence your calls logically and precisely.
 """
 
-# Create A2A clients using ClientFactory (will be initialized when needed)
-def create_client(url):
-    """Create an A2A client for the given URL using ClientFactory"""
-    return ClientFactory.create_client_with_jsonrpc_transport(url=url)
+# Cache for downstream A2A clients keyed by agent label.
+_client_registry: dict[str, A2AClient] = {}
 
-investigation_client = None
-critic_client = None
-actuator_client = None
 
-def delegate_to_investigation_agent(transaction_details: str) -> str:
+def _get_or_create_client(cache_key: str, url: str) -> A2AClient | None:
+    """Return a cached A2A client or create a new one for the target URL."""
+    client = _client_registry.get(cache_key)
+    if client is not None:
+        return client
+
+    try:
+        httpx_client = httpx.AsyncClient(timeout=30.0)
+        client = A2AClient(httpx_client=httpx_client, url=url)
+        _client_registry[cache_key] = client
+        logger.info("Created A2A client for %s at %s", cache_key, url)
+        return client
+    except Exception as exc:  # pragma: no cover - defensive logging
+        logger.error(
+            "Failed to create A2A client for %s at %s: %s",
+            cache_key,
+            url,
+            exc,
+            exc_info=True,
+        )
+        return None
+
+
+def _extract_text_from_message(message: Message) -> str:
+    """Combine all text parts from an A2A message into a single string."""
+    texts: list[str] = []
+    if message.parts:
+        for part in message.parts:
+            text_value = None
+            if hasattr(part, "root") and hasattr(part.root, "text"):
+                text_value = part.root.text
+            elif hasattr(part, "text"):
+                text_value = part.text
+            if text_value:
+                texts.append(text_value.strip())
+    return "\n".join(filter(None, texts))
+
+
+def _maybe_extract_json_payload(raw_text: str) -> Any | None:
+    """Attempt to parse JSON content from an agent text response."""
+    candidates: list[str] = []
+    normalized = raw_text.strip()
+    if normalized:
+        candidates.append(normalized)
+        colon_index = normalized.find(":")
+        if colon_index != -1 and colon_index + 1 < len(normalized):
+            candidates.append(normalized[colon_index + 1 :].strip())
+
+    for candidate in candidates:
+        if not candidate:
+            continue
+        try:
+            return json.loads(candidate)
+        except json.JSONDecodeError:
+            continue
+    return None
+
+
+def _format_agent_result(agent_label: str, response: SendMessageResponse) -> dict[str, Any]:
+    """Normalize SendMessageResponse into a JSON-serializable payload."""
+    if response is None:
+        return {"agent": agent_label, "error": "No response from agent"}
+
+    root = response.root
+    if isinstance(root, JSONRPCErrorResponse):
+        error_payload = {"agent": agent_label, "error": "Remote agent returned an error"}
+        if root.error:
+            error_payload["code"] = root.error.code
+            error_payload["message"] = root.error.message
+            if root.error.data is not None:
+                error_payload["data"] = root.error.data
+        return error_payload
+
+    result = root.result
+    if isinstance(result, Message):
+        text_content = _extract_text_from_message(result)
+        payload: dict[str, Any] = {
+            "agent": agent_label,
+            "raw_message": text_content,
+        }
+        parsed = _maybe_extract_json_payload(text_content)
+        if parsed is not None:
+            payload["data"] = parsed
+        return payload
+
+    if isinstance(result, Task):
+        return {
+            "agent": agent_label,
+            "task": result.model_dump(mode="json"),
+        }
+
+    return {"agent": agent_label, "result": result}
+
+
+def _normalize_payload(payload: Any, agent_label: str) -> str | None:
+    """Ensure payload is valid JSON and return it as a string."""
+    if isinstance(payload, (dict, list, int, float, bool)) or payload is None:
+        return json.dumps(payload)
+    if isinstance(payload, str):
+        candidate = payload.strip()
+        if not candidate:
+            return json.dumps({})
+        try:
+            parsed = json.loads(candidate)
+        except json.JSONDecodeError:
+            logger.warning(
+                "Payload provided to %s delegate is not valid JSON: %s",
+                agent_label,
+                payload,
+            )
+            return None
+        return json.dumps(parsed)
+
+    logger.warning("Unsupported payload type %s for %s delegate", type(payload), agent_label)
+    return None
+
+
+async def _delegate_via_a2a(
+    *,
+    agent_label: str,
+    cache_key: str,
+    service_url: str,
+    payload_prefix: str,
+    payload: Any,
+) -> dict[str, Any]:
+    """Send a JSON-RPC message to a downstream agent and return normalized output."""
+    client = _get_or_create_client(cache_key, service_url)
+    if client is None:
+        return {"agent": agent_label, "error": f"Unable to connect to {agent_label}"}
+
+    payload_json = _normalize_payload(payload, agent_label)
+    if payload_json is None:
+        return {
+            "agent": agent_label,
+            "error": "Provided payload is not valid JSON",
+        }
+
+    message = Message(
+        message_id=str(uuid.uuid4()),
+        role=Role.user,
+        parts=[TextPart(text=f"{payload_prefix} {payload_json}")],
+    )
+    request = SendMessageRequest(
+        id=str(uuid.uuid4()),
+        params=MessageSendParams(message=message),
+    )
+
+    try:
+        response = await client.send_message(request)
+    except Exception as exc:  # pragma: no cover - network failure path
+        logger.error("Error while calling %s: %s", agent_label, exc, exc_info=True)
+        return {"agent": agent_label, "error": str(exc)}
+
+    return _format_agent_result(agent_label, response)
+
+
+async def delegate_to_investigation_agent(transaction_details: Any) -> dict[str, Any]:
     """Delegates the investigation of a suspicious transaction to the InvestigationAgent."""
-    logger.info(f"Delegating to InvestigationAgent with transaction: {transaction_details}")
-    try:
-        global investigation_client
-        if investigation_client is None:
-            investigation_client = create_client(INVESTIGATION_AGENT_URL)
-        
-        # For now, return a simulated response since other agents are not yet deployed
-        logger.info("Simulating investigation response (other agents not yet deployed)")
-        return json.dumps({
-            "status": "investigation_completed",
-            "risk_score": 0.75,
-            "findings": "High-value transaction to new recipient",
-            "recommendation": "Review required"
-        })
-    except Exception as e:
-        logger.error(f"Error calling InvestigationAgent: {e}", exc_info=True)
-        return f"Error: {e}"
+    logger.info("Delegating to InvestigationAgent with transaction payload.")
+    return await _delegate_via_a2a(
+        agent_label="InvestigationAgent",
+        cache_key="investigation_agent",
+        service_url=INVESTIGATION_AGENT_URL,
+        payload_prefix="investigate_transaction:",
+        payload=transaction_details,
+    )
 
-def delegate_to_critic_agent(case_file: str) -> str:
+
+async def delegate_to_critic_agent(case_file: Any) -> dict[str, Any]:
     """Delegates the review of a case file to the CriticAgent."""
-    logger.info(f"Delegating to CriticAgent with case file: {case_file}")
-    try:
-        global critic_client
-        if critic_client is None:
-            critic_client = create_client(CRITIC_AGENT_URL)
-        
-        # For now, return a simulated response since other agents are not yet deployed
-        logger.info("Simulating critic response (other agents not yet deployed)")
-        return json.dumps({
-            "status": "critique_completed",
-            "verdict": "concur",
-            "confidence": 0.8,
-            "reasoning": "Pattern matches known fraud indicators"
-        })
-    except Exception as e:
-        logger.error(f"Error calling CriticAgent: {e}", exc_info=True)
-        return f"Error: {e}"
+    logger.info("Delegating to CriticAgent with case file payload.")
+    return await _delegate_via_a2a(
+        agent_label="CriticAgent",
+        cache_key="critic_agent",
+        service_url=CRITIC_AGENT_URL,
+        payload_prefix="critique_case:",
+        payload=case_file,
+    )
 
-def delegate_to_actuator_agent(action_command: str) -> str:
+
+async def delegate_to_actuator_agent(action_command: Any) -> dict[str, Any]:
     """Delegates a validated action to the ActuatorAgent."""
-    logger.info(f"Delegating to ActuatorAgent with command: {action_command}")
-    try:
-        global actuator_client
-        if actuator_client is None:
-            actuator_client = create_client(ACTUATOR_AGENT_URL)
-        
-        # For now, return a simulated response since other agents are not yet deployed
-        logger.info("Simulating actuator response (other agents not yet deployed)")
-        return json.dumps({
-            "status": "action_completed",
-            "result": "Account security enhanced",
-            "action_taken": "Monitoring increased for account"
-        })
-    except Exception as e:
-        logger.error(f"Error calling ActuatorAgent: {e}", exc_info=True)
-        return f"Error: {e}"
+    logger.info("Delegating to ActuatorAgent with command payload.")
+    return await _delegate_via_a2a(
+        agent_label="ActuatorAgent",
+        cache_key="actuator_agent",
+        service_url=ACTUATOR_AGENT_URL,
+        payload_prefix="execute_action:",
+        payload=action_command,
+    )
 
 # Create function tools
 investigation_tool = FunctionTool(delegate_to_investigation_agent)
@@ -136,6 +275,13 @@ class OrchestratorService:
                 actuator_tool,
             ],
         )
+        self.session_service = InMemorySessionService()
+        self.runner = Runner(
+            app_name="vigil_orchestrator_app",
+            agent=self.llm_agent,
+            session_service=self.session_service,
+        )
+        self.default_user_id = "transaction-monitor"
         logger.info("OrchestratorService initialized.")
 
     async def process_transaction_alert(self, transaction_data: dict) -> dict:
@@ -157,35 +303,89 @@ class OrchestratorService:
             "Provide a summary of the outcome."
         )
         try:
-            # Create a proper invocation context for the ADK agent
-            from google.adk.agents.invocation_context import InvocationContext
-            from google.genai import types
-            
-            # Create the message content in proper ADK format
             message_content = types.Content(
-                role='user',
-                parts=[types.Part(text=initial_prompt)]
+                role="user",
+                parts=[types.Part(text=initial_prompt)],
             )
-            
-            # Create invocation context
-            context = InvocationContext(
-                agent=self.llm_agent,
-                content=message_content
+
+            user_id = (
+                transaction_data.get("from_account_id")
+                or transaction_data.get("user_id")
+                or self.default_user_id
             )
-            
-            # Send the context to the LLM agent and collect the response  
-            final_response_parts = []
-            async for event in self.llm_agent.run_async(context):
-                if hasattr(event, 'content') and event.content and hasattr(event.content, 'parts'):
+            session_id = str(uuid.uuid4())
+            await self.session_service.create_session(
+                app_name=self.runner.app_name,
+                user_id=user_id,
+                session_id=session_id,
+            )
+
+            tool_events: list[dict[str, Any]] = []
+            final_text = ""
+            last_text = ""
+
+            async for event in self.runner.run_async(
+                user_id=user_id,
+                session_id=session_id,
+                new_message=message_content,
+            ):
+                try:
+                    function_calls = event.get_function_calls()
+                except AttributeError:
+                    function_calls = []
+                for call in function_calls or []:
+                    tool_events.append(
+                        {
+                            "event": "call",
+                            "tool": call.name,
+                            "args": call.args,
+                        }
+                    )
+
+                try:
+                    function_responses = event.get_function_responses()
+                except AttributeError:
+                    function_responses = []
+                for response in function_responses or []:
+                    tool_events.append(
+                        {
+                            "event": "response",
+                            "tool": response.name,
+                            "response": response.response,
+                        }
+                    )
+
+                text_segments: list[str] = []
+                if getattr(event, "content", None) and getattr(event.content, "parts", None):
                     for part in event.content.parts:
-                        if hasattr(part, 'text') and part.text:
-                            final_response_parts.append(part.text)
-            
-            final_response = ''.join(final_response_parts)
-            logger.info(f"Orchestration flow completed. Final response: {final_response}")
-            return {"status": "completed", "summary": final_response}
-        except Exception as e:
-            logger.error(f"An error occurred during the orchestration flow: {e}", exc_info=True)
+                        if getattr(part, "text", None):
+                            text_segments.append(part.text.strip())
+
+                if text_segments:
+                    last_text = "\n".join(filter(None, text_segments))
+
+                if getattr(event, "is_final_response", None) and event.is_final_response():
+                    final_text = last_text
+
+            summary = final_text or last_text or "No summary produced by orchestrator."
+            logger.info(
+                "Orchestration flow completed for session %s (user %s).",
+                session_id,
+                user_id,
+            )
+            return {
+                "status": "completed",
+                "summary": summary,
+                "session_id": session_id,
+                "user_id": user_id,
+                "tool_events": tool_events,
+            }
+        except Exception as e:  # pragma: no cover - defensive logging
+            logger.error(
+                "An error occurred during the orchestration flow: %s",
+                e,
+                exc_info=True,
+            )
             return {"status": "error", "message": str(e)}
 
 

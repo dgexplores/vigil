@@ -25,7 +25,7 @@ data:
         kind: postgres-sql
         source: ledger-db
         description: "Retrieves all transactions that have occurred since the given timestamp."
-        statement: "SELECT transaction_id, amount, timestamp, from_account_id, to_account_id FROM transactions WHERE timestamp > $1 ORDER BY timestamp ASC;"
+        statement: "SELECT transaction_id, amount, timestamp, from_acct AS from_account_id, to_acct AS to_account_id FROM transactions WHERE timestamp > $1 ORDER BY timestamp ASC;"
         parameters:
           - name: last_timestamp
             type: string
@@ -35,7 +35,7 @@ data:
         kind: postgres-sql
         source: accounts-db
         description: "Fetches user profile information for a given account ID."
-        statement: "SELECT u.user_id, u.username, u.ext_user_id, a.account_id FROM users u JOIN accounts a ON u.ext_user_id = a.ext_user_id WHERE a.account_id = $1;"
+        statement: "SELECT accountid AS account_id, username, firstname, lastname, state, zip FROM users WHERE accountid = $1;"
         parameters:
           - name: account_id
             type: string
@@ -45,7 +45,7 @@ data:
         kind: postgres-sql
         source: ledger-db
         description: "Retrieves the 50 most recent transactions for a given user ID to understand their history."
-        statement: "SELECT * FROM transactions WHERE from_account_id = $1 ORDER BY timestamp DESC LIMIT 50;"
+        statement: "SELECT transaction_id, amount, timestamp, from_acct, to_acct, from_route, to_route FROM transactions WHERE from_acct = $1 ORDER BY timestamp DESC LIMIT 50;"
         parameters:
           - name: account_id
             type: string

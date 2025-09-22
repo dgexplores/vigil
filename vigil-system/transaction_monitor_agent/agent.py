@@ -20,7 +20,17 @@ import logging
 import json
 import requests
 from a2a.client.legacy import A2AClient
-from a2a.types import SendMessageRequest, Task, MessageSendParams, Message, TextPart, Role
+from a2a.types import (
+    JSONRPCErrorResponse,
+    Message,
+    MessageSendParams,
+    Role,
+    SendMessageRequest,
+    SendMessageResponse,
+    SendMessageSuccessResponse,
+    Task,
+    TextPart,
+)
 import httpx
 import uuid
 
@@ -157,11 +167,42 @@ class TransactionMonitorAgent:
         except Exception as e:
             logger.error(f"Error processing new transactions: {e}", exc_info=True)
 
+    @staticmethod
+    def _extract_message_text(message: Message) -> str:
+        """Return concatenated text from the parts of a Message."""
+        if not getattr(message, "parts", None):
+            return ""
+
+        texts = []
+        for part in message.parts:
+            text_value = None
+            if hasattr(part, "root") and getattr(part.root, "text", None):
+                text_value = part.root.text
+            elif getattr(part, "text", None):
+                text_value = part.text
+
+            if text_value:
+                texts.append(text_value.strip())
+
+        return "\n".join(filter(None, texts))
+
+    @staticmethod
+    def _format_success_payload(result_payload):
+        """Generate a human-readable summary for orchestrator responses."""
+        if isinstance(result_payload, Message):
+            text = TransactionMonitorAgent._extract_message_text(result_payload)
+            return text or f"Message parts: {result_payload.parts}"
+
+        if isinstance(result_payload, Task):
+            return f"Task {result_payload.id} status={result_payload.status.state}"
+
+        return repr(result_payload)
+
     def create_orchestrator_client(self):
         """Create A2A client for orchestrator communication."""
         try:
             # Create legacy A2A client with httpx
-            httpx_client = httpx.AsyncClient()
+            httpx_client = httpx.AsyncClient(timeout=httpx.Timeout(60.0))
             client = A2AClient(
                 httpx_client=httpx_client,
                 url=f"{ORCHESTRATOR_URL}"
@@ -202,14 +243,44 @@ class TransactionMonitorAgent:
             )
             
             # Send A2A message to orchestrator
-            result = await self.orchestrator_client.send_message(message_request)
-            
-            if result and hasattr(result, 'message'):
-                logger.info(f"Successfully sent alert for transaction: {transaction['transaction_id']}")
-                logger.info(f"Orchestrator response: {result.message}")
+            response = await self.orchestrator_client.send_message(message_request)
+
+            if not isinstance(response, SendMessageResponse):
+                logger.error(
+                    "Unexpected orchestrator response type for transaction %s: %s",
+                    transaction["transaction_id"],
+                    type(response),
+                )
+                return
+
+            root_payload = response.root
+            if isinstance(root_payload, JSONRPCErrorResponse):
+                logger.error(
+                    "Orchestrator returned JSON-RPC error for transaction %s: %s",
+                    transaction["transaction_id"],
+                    root_payload.error,
+                )
+                return
+
+            if isinstance(root_payload, SendMessageSuccessResponse):
+                payload = root_payload.result
             else:
-                logger.error(f"No response from orchestrator for transaction {transaction['transaction_id']}")
-                
+                payload = getattr(root_payload, "result", None)
+
+            if payload is None:
+                logger.error(
+                    "Orchestrator response missing result for transaction %s",
+                    transaction["transaction_id"],
+                )
+                return
+
+            summary = self._format_success_payload(payload)
+            logger.info(
+                "Successfully sent alert for transaction %s. Orchestrator response: %s",
+                transaction["transaction_id"],
+                summary,
+            )
+
         except Exception as e:
             logger.error(f"Failed to alert orchestrator for transaction {transaction['transaction_id']}: {e}", exc_info=True)
 

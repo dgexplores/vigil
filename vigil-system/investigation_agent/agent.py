@@ -24,6 +24,9 @@ from fastapi import FastAPI, HTTPException
 import uvicorn
 from google.adk.agents import LlmAgent
 from google.adk.models import Gemini
+from google.adk.sessions.in_memory_session_service import InMemorySessionService
+from google.adk.runners import Runner
+from google.genai import types
 from a2a.types import SendMessageRequest, SendMessageResponse, SendMessageSuccessResponse, Message, TextPart, Role
 
 # Configure logging
@@ -56,6 +59,13 @@ class InvestigationService:
             model=Gemini(api_key=GEMINI_API_KEY),
             instruction=INVESTIGATION_PROMPT,
         )
+        self.session_service = InMemorySessionService()
+        self.runner = Runner(
+            app_name="investigation_agent_app",
+            agent=self.llm_agent,
+            session_service=self.session_service,
+        )
+        self.default_user_id = "orchestrator"
         logger.info("InvestigationService initialized.")
 
     def call_genai_toolbox_api(self, tool_name: str, payload: dict):
@@ -144,11 +154,48 @@ class InvestigationService:
 
         try:
             logger.info("Sending data to LLM for fraud analysis...")
-            # Use async/await pattern for LLM processing
-            llm_response = await asyncio.to_thread(self.llm_agent.send, prompt)
-            # The response from the LLM is expected to be a JSON string.
-            # We need to clean it up in case the LLM adds markdown backticks.
-            cleaned_response = llm_response.strip().replace("```json", "").replace("```", "").strip()
+            message_content = types.Content(
+                role="user",
+                parts=[types.Part(text=prompt)],
+            )
+
+            user_id = transaction_data.get("from_account_id") or self.default_user_id
+            session_id = str(uuid.uuid4())
+            await self.session_service.create_session(
+                app_name=self.runner.app_name,
+                user_id=user_id,
+                session_id=session_id,
+            )
+
+            final_text = ""
+            last_text = ""
+
+            async for event in self.runner.run_async(
+                user_id=user_id,
+                session_id=session_id,
+                new_message=message_content,
+            ):
+                if getattr(event, "content", None) and getattr(event.content, "parts", None):
+                    text_segments = []
+                    for part in event.content.parts:
+                        if getattr(part, "text", None):
+                            text_segments.append(part.text.strip())
+                    if text_segments:
+                        last_text = "\n".join(filter(None, text_segments))
+
+                if getattr(event, "is_final_response", None) and event.is_final_response():
+                    final_text = last_text
+
+            llm_response = final_text or last_text
+            if not llm_response:
+                raise ValueError("Received empty response from investigation LLM")
+
+            cleaned_response = (
+                llm_response.strip()
+                .replace("```json", "")
+                .replace("```", "")
+                .strip()
+            )
             analysis = json.loads(cleaned_response)
             logger.info(f"Received analysis from LLM: {analysis}")
         except Exception as e:
