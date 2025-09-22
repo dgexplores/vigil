@@ -130,19 +130,7 @@ class TransactionMonitorAgent:
              
             if not transactions:
                 logger.info("No new transactions found.")
-                # For development, still add some simulation for testing
-                import random
-                if random.random() < 0.1:  # 10% chance of simulated transaction for testing
-                    simulated_tx = {
-                        "transaction_id": f"sim_{int(time.time())}",
-                        "amount": "1500.00",  # Above fraud threshold
-                        "timestamp": datetime.now(timezone.utc).isoformat(),
-                        "from_account_id": "acc_123",
-                        "to_account_id": "acc_456"
-                    }
-                    logger.warning(f"Simulated high-value transaction detected: {simulated_tx['transaction_id']} for amount {simulated_tx['amount']}. Alerting orchestrator.")
-                    await self.alert_orchestrator(simulated_tx)
-                    self.last_processed_timestamp = simulated_tx["timestamp"]
+                # Simulation disabled to avoid synthetic alerts in production environments.
                 return
              
             logger.info(f"Found {len(transactions)} new transactions.")

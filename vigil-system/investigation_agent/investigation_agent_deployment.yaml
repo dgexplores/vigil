@@ -17,7 +17,7 @@ spec:
       containers:
       - name: investigation-agent
         # Replace with the actual image path after building and pushing
-        image: southamerica-east1-docker.pkg.dev/vigil-demo-hackathon/vigil-repo/investigation-agent:latest
+        image: southamerica-east1-docker.pkg.dev/vigil-demo-hackathon/vigil-repo/investigation-agent:v20250922-g25
         ports:
         - containerPort: 8000
         env:

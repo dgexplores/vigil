@@ -17,13 +17,13 @@ spec:
       containers:
       - name: transaction-monitor-agent
         # Replace with the actual image path after building and pushing
-        image: southamerica-east1-docker.pkg.dev/vigil-demo-hackathon/vigil-repo/transaction-monitor-agent:latest
+        image: southamerica-east1-docker.pkg.dev/vigil-demo-hackathon/vigil-repo/transaction-monitor-agent:v20250922-g03
         env:
         - name: GENAL_TOOLBOX_SERVICE_URL
           value: "http://genal-toolbox-service"
         - name: ORCHESTRATOR_SERVICE_URL
           value: "http://orchestrator-agent-service"
         - name: POLL_INTERVAL
-          value: "5"
+          value: "30"
         - name: FRAUD_THRESHOLD
           value: "1000.0"

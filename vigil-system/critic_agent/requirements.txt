@@ -1,4 +1,0 @@
-google-adk
-fastapi
-uvicorn[standard]
-a2a-sdk[http-server]

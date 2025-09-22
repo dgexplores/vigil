@@ -63,7 +63,7 @@ This section lists the known issues in the system and potential areas for future
 ### Known Issues (as of 2025-09-22)
 
 *   **A2A Timeouts:** The Transaction Monitor agent sometimes experiences timeouts when communicating with the Orchestrator agent, especially under heavy load.
-*   **Critic Agent Regression:** The Critic Agent is experiencing an `AttributeError: 'LlmAgent' object has no attribute 'send'` error, which prevents it from reviewing cases.
+*   **Risk Threshold Calibration:** With the orchestrator making direct actuation decisions, review the `RISK_SCORE_THRESHOLD` setting to balance sensitivity and false positives for your environment.
 *   **GenAI Toolbox Data Errors:** The `get_user_details_by_account` tool is failing because the `accounts` table does not exist in the database it's connected to.
 
 ### Future Improvements
