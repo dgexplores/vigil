@@ -17,7 +17,7 @@ spec:
       containers:
       - name: transaction-monitor-agent
         # Replace with the actual image path after building and pushing
-        image: southamerica-east1-docker.pkg.dev/vigil-demo-hackathon/vigil-repo/transaction-monitor-agent:latest
+        image: southamerica-east1-docker.pkg.dev/vigil-demo-hackathon/vigil-repo/transaction-monitor-agent:v20250922-2
         env:
         - name: GENAL_TOOLBOX_SERVICE_URL
           value: "http://genal-toolbox-service"
