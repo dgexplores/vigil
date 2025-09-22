@@ -5,8 +5,10 @@
 ### ✅ Fixes & Enhancements
 
 - **CriticAgent modernization**: Ported the critic service to the shared ADK `Runner` + in-memory session pattern so it streams Gemini responses, removing the deprecated `LlmAgent.send` call that was crashing every high-risk review.
+- **Critic verdict parsing**: Hardened JSON extraction so stray model narration no longer breaks `'verdict'` parsing, keeping critic responses reliable.
 - **Resilient orchestration alerts**: Lifted the transaction monitor's A2A HTTP timeout to 30s to accommodate multi-hop orchestration cycles. This reduces the 5s JSON-RPC timeout spikes observed under load.
 - **GenAI toolbox schema fix**: Updated `get_user_details_by_account` SQL to match the Bank of Anthos `users` table (`accountid`) so investigation agents receive real profile metadata instead of 400 errors.
+- **Ledger query alignment**: Adjusted transaction history and new-transaction queries to use canonical `from_acct` / `to_acct` columns exposed by the Bank of Anthos ledger.
 - **Operational record**: Added `docs/VIGIL_CLUSTER_VALIDATION_2025-09-22.md` summarizing the live cluster evaluation, log evidence, and agreed next actions.
 
 ### 📋 Deployment Notes

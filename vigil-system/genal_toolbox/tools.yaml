@@ -19,7 +19,7 @@ tools:
     kind: postgres-sql
     source: ledger-db
     description: "Retrieves all transactions that have occurred since the given timestamp."
-    statement: "SELECT transaction_id, amount, timestamp, from_acct as from_account_id, to_acct as to_account_id FROM transactions WHERE timestamp > $1 ORDER BY timestamp ASC;"
+    statement: "SELECT transaction_id, amount, timestamp, from_acct AS from_account_id, to_acct AS to_account_id FROM transactions WHERE timestamp > $1 ORDER BY timestamp ASC;"
     parameters:
       - name: last_timestamp
         type: string
@@ -39,7 +39,7 @@ tools:
     kind: postgres-sql
     source: ledger-db
     description: "Retrieves the 50 most recent transactions for a given user ID to understand their history."
-    statement: "SELECT * FROM transactions WHERE from_acct = $1 ORDER BY timestamp DESC LIMIT 50;"
+    statement: "SELECT transaction_id, amount, timestamp, from_acct, to_acct, from_route, to_route FROM transactions WHERE from_acct = $1 ORDER BY timestamp DESC LIMIT 50;"
     parameters:
       - name: account_id
         type: string

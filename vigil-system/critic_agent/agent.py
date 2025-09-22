@@ -129,7 +129,15 @@ class CriticService:
                 .replace("```", "")
                 .strip()
             )
-            verdict = json.loads(cleaned_response)
+            try:
+                verdict = json.loads(cleaned_response)
+            except json.JSONDecodeError:
+                start = cleaned_response.find("{")
+                end = cleaned_response.rfind("}")
+                if start != -1 and end != -1 and start < end:
+                    verdict = json.loads(cleaned_response[start : end + 1])
+                else:
+                    raise
             logger.info(
                 "Received verdict from LLM for session %s (user %s): %s",
                 session_id,
