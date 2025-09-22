@@ -202,7 +202,7 @@ class TransactionMonitorAgent:
         """Create A2A client for orchestrator communication."""
         try:
             # Create legacy A2A client with httpx
-            httpx_client = httpx.AsyncClient(timeout=httpx.Timeout(30.0))
+            httpx_client = httpx.AsyncClient(timeout=httpx.Timeout(60.0))
             client = A2AClient(
                 httpx_client=httpx_client,
                 url=f"{ORCHESTRATOR_URL}"
