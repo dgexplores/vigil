@@ -17,7 +17,7 @@ import logging
 import json
 import uuid
 import asyncio
-from typing import Dict, Any
+from typing import Dict, Any, Optional
 
 import requests
 from fastapi import FastAPI, HTTPException
@@ -43,6 +43,49 @@ app = FastAPI(title="Actuator Agent A2A Server")
 
 # Global actuator service instance
 actuator_service = None
+
+
+def _strip_str(value: Any) -> Optional[str]:
+    if isinstance(value, str):
+        candidate = value.strip()
+        if candidate:
+            return candidate
+    return None
+
+
+def _extract_account_id(payload: Dict[str, Any]) -> Optional[str]:
+    account_id = _strip_str(payload.get("account_id"))
+    if account_id:
+        return account_id
+
+    case_file = payload.get("case_file")
+    if isinstance(case_file, dict):
+        transaction_data = case_file.get("transaction_data")
+        if isinstance(transaction_data, dict):
+            for key in ("account_id", "from_account_id", "user_id"):
+                candidate = _strip_str(transaction_data.get(key))
+                if candidate:
+                    return candidate
+
+        user_details = case_file.get("user_details")
+        if isinstance(user_details, dict):
+            for key in ("account_id", "ext_user_id"):
+                candidate = _strip_str(user_details.get(key))
+                if candidate:
+                    return candidate
+        elif isinstance(user_details, list):
+            for entry in user_details:
+                if isinstance(entry, dict):
+                    for key in ("account_id", "ext_user_id"):
+                        candidate = _strip_str(entry.get(key))
+                        if candidate:
+                            return candidate
+
+    ext_user_id = _strip_str(payload.get("ext_user_id"))
+    if ext_user_id:
+        return ext_user_id
+
+    return None
 
 
 class ActuatorService:
@@ -115,25 +158,27 @@ class ActuatorService:
             return {"status": "error", "message": "Missing 'action' in command"}
 
         if action == "lock_account":
-            ext_user_id = command_data.get("ext_user_id")
-            if not ext_user_id:
-                logger.error("Missing 'ext_user_id' for lock_account action.")
+            account_id = _extract_account_id(command_data)
+            if not account_id:
+                logger.error("Missing 'account_id' for lock_account action.")
                 return {
                     "status": "error",
-                    "message": "Missing 'ext_user_id' for lock_account action",
+                    "message": "Missing 'account_id' for lock_account action",
                 }
 
-            logger.info("Executing lock_account tool for ext_user_id: %s", ext_user_id)
+            ext_user_id = _strip_str(command_data.get("ext_user_id"))
+
+            logger.info("Executing lock_account tool for account_id: %s", account_id)
             response = await asyncio.to_thread(
                 self.call_genai_toolbox_api,
                 "lock_account",
-                {"ext_user_id": ext_user_id},
+                {"account_id": account_id},
             )
 
             if isinstance(response, dict) and response.get("error"):
                 logger.error(
-                    "Error executing lock_account for ext_user_id %s: %s",
-                    ext_user_id,
+                    "Error executing lock_account for account_id %s: %s",
+                    account_id,
                     response,
                 )
                 return {
@@ -142,10 +187,11 @@ class ActuatorService:
                     "details": response,
                 }
 
-            logger.info("Successfully locked account for ext_user_id: %s", ext_user_id)
+            logger.info("Successfully locked account for account_id: %s", account_id)
             return {
                 "status": "success",
                 "action": action,
+                "account_id": account_id,
                 "ext_user_id": ext_user_id,
                 "response": response,
             }

@@ -61,10 +61,10 @@ You are Vigil Orchestrator, the command agent coordinating fraud investigations 
 Follow this doctrine for every transaction alert:
 1. Always invoke the InvestigationAgent tool first, passing the raw transaction JSON so it can produce a case file with a risk score.
 2. Review the investigation response. The escalation threshold for risky activity is {threshold}.
-3. If the risk score is greater than or equal to {threshold}, call the ActuatorAgent tool with an account lock command that includes the ext_user_id and an explanatory reason.
+3. If the risk score is greater than or equal to {threshold}, call the ActuatorAgent tool exactly once with JSON of the form {{"action": "lock_account", "account_id": "<ACCOUNT_ID>", "ext_user_id": "<EXT_USER_ID>", "reason": "<SHORT_REASON>", "case_file": <CASE_FILE> }}. The GenAI toolbox expects the `account_id` field; include `ext_user_id` when available.
 4. If the risk score is below the threshold, do not actuate; instead, summarize why no action was taken.
 5. Conclude with a concise narrative summary that states the risk score, whether actuation occurred, and the supporting justification.
-Respond clearly and avoid redundant tool calls.
+Do not send alternative keys such as "command". Avoid repeated actuator calls after a successful response.
 """
 
 # Cache for downstream A2A clients keyed by agent label.
@@ -74,6 +74,9 @@ _TOOL_LABELS = {
     "delegate_to_investigation_agent": "InvestigationAgent",
     "delegate_to_actuator_agent": "ActuatorAgent",
 }
+
+
+_latest_case_file: Any | None = None
 
 
 def _human_tool_name(raw_name: str) -> str:
@@ -281,6 +284,81 @@ def _extract_ext_user_id(case_file: Any) -> Optional[str]:
     return None
 
 
+def _extract_account_id(case_file: Any) -> Optional[str]:
+    """Extract an account identifier from the case file."""
+    if not isinstance(case_file, dict):
+        return None
+
+    transaction_data = case_file.get("transaction_data")
+    if isinstance(transaction_data, dict):
+        for key in ("account_id", "from_account_id", "user_id"):
+            value = transaction_data.get(key)
+            if isinstance(value, str) and value.strip():
+                return value.strip()
+
+    user_details = case_file.get("user_details")
+    if isinstance(user_details, dict):
+        candidate = user_details.get("account_id") or user_details.get("ext_user_id")
+        if isinstance(candidate, str) and candidate.strip():
+            return candidate.strip()
+    elif isinstance(user_details, list):
+        for entry in user_details:
+            if isinstance(entry, dict):
+                candidate = entry.get("account_id") or entry.get("ext_user_id")
+                if isinstance(candidate, str) and candidate.strip():
+                    return candidate.strip()
+
+    return None
+
+
+def _prepare_actuator_payload(raw_command: Any) -> tuple[Optional[dict[str, Any]], Optional[str]]:
+    """Normalize LLM-provided actuator command payload."""
+    if isinstance(raw_command, dict):
+        payload = dict(raw_command)
+    elif isinstance(raw_command, str):
+        try:
+            payload = json.loads(raw_command)
+        except json.JSONDecodeError:
+            return None, "Actuator command must be valid JSON."
+    else:
+        return None, f"Unsupported actuator payload type: {type(raw_command)}"
+
+    case_file = payload.get("case_file")
+    if case_file is None and _latest_case_file is not None:
+        case_file = _latest_case_file
+    account_id = payload.get("account_id") or payload.get("from_account_id")
+    ext_user_id = payload.get("ext_user_id") or payload.get("user_id")
+
+    if account_id is None and isinstance(case_file, dict):
+        account_id = _extract_account_id(case_file)
+    if ext_user_id is None and isinstance(case_file, dict):
+        ext_user_id = _extract_ext_user_id(case_file)
+        account_id = _extract_account_id(case_file)
+    if account_id is None and ext_user_id is not None:
+        account_id = ext_user_id
+
+    if not account_id:
+        return None, (
+            "Actuator command missing account_id. Include the originating account_id from the investigation results."
+        )
+
+    reason = payload.get("reason")
+    if not isinstance(reason, str) or not reason.strip():
+        reason = "Account locked due to investigation exceeding risk threshold."
+
+    normalized: dict[str, Any] = {
+        "action": "lock_account",
+        "account_id": account_id,
+        "reason": reason.strip(),
+    }
+    if ext_user_id:
+        normalized["ext_user_id"] = ext_user_id
+    if case_file is not None:
+        normalized["case_file"] = case_file
+
+    return normalized, None
+
+
 async def _delegate_via_a2a(
     *,
     agent_label: str,
@@ -323,24 +401,39 @@ async def _delegate_via_a2a(
 async def delegate_to_investigation_agent(transaction_details: Any) -> dict[str, Any]:
     """Delegates the investigation of a suspicious transaction to the InvestigationAgent."""
     logger.info("Delegating to InvestigationAgent with transaction payload.")
-    return await _delegate_via_a2a(
+    result = await _delegate_via_a2a(
         agent_label="InvestigationAgent",
         cache_key="investigation_agent",
         service_url=INVESTIGATION_AGENT_URL,
         payload_prefix="investigate_transaction:",
         payload=transaction_details,
     )
+    if isinstance(result, dict) and result.get("data") is not None:
+        global _latest_case_file
+        _latest_case_file = result["data"]
+    return result
 
 
 async def delegate_to_actuator_agent(action_command: Any) -> dict[str, Any]:
-    """Delegates a validated action to the ActuatorAgent."""
+    """Send a lock_account command to the ActuatorAgent via A2A.
+
+    Expects JSON containing `action`, `account_id`, `ext_user_id` (optional), `reason`,
+    and optionally `case_file`. The `account_id` field is required by the GenAI toolbox.
+    """
     logger.info("Delegating to ActuatorAgent with command payload.")
+    normalized_payload, error = _prepare_actuator_payload(action_command)
+    if error:
+        logger.error("Actuator command validation failed: %s", error)
+        return {
+            "agent": "ActuatorAgent",
+            "error": error,
+        }
     return await _delegate_via_a2a(
         agent_label="ActuatorAgent",
         cache_key="actuator_agent",
         service_url=ACTUATOR_AGENT_URL,
         payload_prefix="execute_action:",
-        payload=action_command,
+        payload=normalized_payload,
     )
 
 
@@ -419,11 +512,14 @@ class OrchestratorService:
         tool_events: list[dict[str, Any]] = []
         final_text = ""
         last_text = ""
+        account_id: Optional[str] = None
 
         message_text = (
             "Transaction alert received.\n"
             f"Risk threshold: {self.risk_threshold:.2f}\n"
             "Analyze the details, call InvestigationAgent first, and escalate only when warranted.\n"
+            "When invoking ActuatorAgent, use JSON of the form {\"action\": \"lock_account\", \"account_id\": \"...\", \"ext_user_id\": \"...\", \"reason\": \"...\"}.\n"
+            "Do not use alternate field names such as 'command'.\n"
             f"Transaction JSON:\n{json.dumps(transaction_data, indent=2)}"
         )
         message_content = types.Content(
@@ -492,6 +588,8 @@ class OrchestratorService:
         risk_score = _extract_risk_score(case_file)
         justification = _extract_justification(case_file)
         ext_user_id = _extract_ext_user_id(case_file)
+        if account_id is None:
+            account_id = _extract_account_id(case_file)
 
         should_actuate = False
         if isinstance(actuator_result, dict):
@@ -535,6 +633,8 @@ class OrchestratorService:
             response_payload["risk_score"] = risk_score
         if justification:
             response_payload["justification"] = justification
+        if account_id:
+            response_payload["account_id"] = account_id
         if ext_user_id:
             response_payload["ext_user_id"] = ext_user_id
         if investigation_result is not None:
