@@ -33,6 +33,12 @@ from a2a.types import (
     Task,
     TextPart,
 )
+from google.adk.agents import LlmAgent
+from google.adk.models import Gemini
+from google.adk.runners import Runner
+from google.adk.sessions.in_memory_session_service import InMemorySessionService
+from google.adk.tools import FunctionTool
+from google.genai import types
 
 # Configure logging
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
@@ -48,9 +54,37 @@ ACTUATOR_AGENT_URL = os.environ.get(
     "http://actuator-agent-service",
 )
 RISK_SCORE_THRESHOLD = os.environ.get("RISK_SCORE_THRESHOLD", "7")
+GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY")
+
+ORCHESTRATOR_PROMPT_TEMPLATE = """
+You are Vigil Orchestrator, the command agent coordinating fraud investigations for Bank of Anthos.
+Follow this doctrine for every transaction alert:
+1. Always invoke the InvestigationAgent tool first, passing the raw transaction JSON so it can produce a case file with a risk score.
+2. Review the investigation response. The escalation threshold for risky activity is {threshold}.
+3. If the risk score is greater than or equal to {threshold}, call the ActuatorAgent tool with an account lock command that includes the ext_user_id and an explanatory reason.
+4. If the risk score is below the threshold, do not actuate; instead, summarize why no action was taken.
+5. Conclude with a concise narrative summary that states the risk score, whether actuation occurred, and the supporting justification.
+Respond clearly and avoid redundant tool calls.
+"""
 
 # Cache for downstream A2A clients keyed by agent label.
 _client_registry: dict[str, A2AClient] = {}
+
+_TOOL_LABELS = {
+    "delegate_to_investigation_agent": "InvestigationAgent",
+    "delegate_to_actuator_agent": "ActuatorAgent",
+}
+
+
+def _human_tool_name(raw_name: str) -> str:
+    return _TOOL_LABELS.get(raw_name, raw_name)
+
+
+def _extract_tool_response(tool_events: list[dict[str, Any]], tool_label: str) -> Any:
+    for event in reversed(tool_events):
+        if event.get("tool") == tool_label and event.get("event") == "response":
+            return event.get("response")
+    return None
 
 
 def _get_or_create_client(cache_key: str, url: str) -> A2AClient | None:
@@ -309,6 +343,10 @@ async def delegate_to_actuator_agent(action_command: Any) -> dict[str, Any]:
         payload=action_command,
     )
 
+
+investigation_tool = FunctionTool(delegate_to_investigation_agent)
+actuator_tool = FunctionTool(delegate_to_actuator_agent)
+
 # Create FastAPI app for A2A server functionality
 app = FastAPI(title="Orchestrator Agent A2A Server")
 
@@ -318,6 +356,12 @@ orchestrator_service = None
 class OrchestratorService:
     def __init__(self):
         logger.info("Initializing OrchestratorService...")
+
+        if not GEMINI_API_KEY:
+            raise ValueError(
+                "GEMINI_API_KEY environment variable is required for the orchestrator agent."
+            )
+
         threshold = _parse_float(RISK_SCORE_THRESHOLD)
         if threshold is None:
             logger.warning(
@@ -325,15 +369,38 @@ class OrchestratorService:
                 RISK_SCORE_THRESHOLD,
             )
             threshold = 7.0
+
         self.risk_threshold = threshold
         self.default_user_id = "transaction-monitor"
+
+        instruction = ORCHESTRATOR_PROMPT_TEMPLATE.format(
+            threshold=f"{self.risk_threshold:.2f}"
+        )
+
+        self.llm_agent = LlmAgent(
+            name="orchestrator_agent",
+            model=Gemini(api_key=GEMINI_API_KEY, model="gemini-2.5-flash"),
+            instruction=instruction,
+            tools=[
+                investigation_tool,
+                actuator_tool,
+            ],
+        )
+
+        self.session_service = InMemorySessionService()
+        self.runner = Runner(
+            app_name="vigil_orchestrator_app",
+            agent=self.llm_agent,
+            session_service=self.session_service,
+        )
+
         logger.info(
             "OrchestratorService initialized (risk threshold=%s).",
             self.risk_threshold,
         )
 
     async def process_transaction_alert(self, transaction_data: dict) -> dict:
-        """Take action on a high-risk transaction using downstream agents."""
+        """Run the Gemini-backed orchestration flow for a transaction alert."""
         logger.info("Received transaction alert: %s", transaction_data)
 
         user_id = (
@@ -343,125 +410,110 @@ class OrchestratorService:
         )
         session_id = str(uuid.uuid4())
 
+        await self.session_service.create_session(
+            app_name=self.runner.app_name,
+            user_id=user_id,
+            session_id=session_id,
+        )
+
         tool_events: list[dict[str, Any]] = []
+        final_text = ""
+        last_text = ""
 
-        # Step 1: Investigate the transaction
-        tool_events.append(
-            {
-                "event": "call",
-                "tool": "InvestigationAgent",
-                "args": {"transaction": transaction_data},
-            }
+        message_text = (
+            "Transaction alert received.\n"
+            f"Risk threshold: {self.risk_threshold:.2f}\n"
+            "Analyze the details, call InvestigationAgent first, and escalate only when warranted.\n"
+            f"Transaction JSON:\n{json.dumps(transaction_data, indent=2)}"
         )
-        investigation_result = await delegate_to_investigation_agent(transaction_data)
-        tool_events.append(
-            {
-                "event": "response",
-                "tool": "InvestigationAgent",
-                "response": investigation_result,
-            }
+        message_content = types.Content(
+            role="user",
+            parts=[types.Part(text=message_text)],
         )
 
-        if investigation_result.get("error"):
-            summary = (
-                "InvestigationAgent returned an error; unable to proceed to actuation."
-            )
+        try:
+            async for event in self.runner.run_async(
+                user_id=user_id,
+                session_id=session_id,
+                new_message=message_content,
+            ):
+                for call in getattr(event, "get_function_calls", lambda: [])() or []:
+                    tool_events.append(
+                        {
+                            "event": "call",
+                            "tool": _human_tool_name(call.name),
+                            "args": call.args,
+                        }
+                    )
+
+                for response in getattr(event, "get_function_responses", lambda: [])() or []:
+                    tool_events.append(
+                        {
+                            "event": "response",
+                            "tool": _human_tool_name(response.name),
+                            "response": response.response,
+                        }
+                    )
+
+                if getattr(event, "content", None) and getattr(event.content, "parts", None):
+                    text_segments = []
+                    for part in event.content.parts:
+                        if getattr(part, "text", None):
+                            text_segments.append(part.text.strip())
+                    if text_segments:
+                        last_text = "\n".join(filter(None, text_segments))
+
+                if getattr(event, "is_final_response", None) and event.is_final_response():
+                    final_text = last_text
+
+        except Exception as exc:  # pragma: no cover - defensive logging
             logger.error(
-                "Investigation failed for session %s (user %s): %s",
-                session_id,
-                user_id,
-                investigation_result.get("error"),
+                "An error occurred during the orchestration flow: %s",
+                exc,
+                exc_info=True,
             )
             return {
                 "status": "error",
-                "summary": summary,
+                "summary": str(exc),
                 "session_id": session_id,
                 "user_id": user_id,
                 "tool_events": tool_events,
             }
 
-        case_file = investigation_result.get("data")
+        summary = final_text or last_text or "No summary produced by orchestrator."
+
+        investigation_result = _extract_tool_response(tool_events, "InvestigationAgent")
+        actuator_result = _extract_tool_response(tool_events, "ActuatorAgent")
+
+        case_file = None
+        if isinstance(investigation_result, dict):
+            case_file = investigation_result.get("data")
+
         risk_score = _extract_risk_score(case_file)
         justification = _extract_justification(case_file)
+        ext_user_id = _extract_ext_user_id(case_file)
 
-        if risk_score is None:
-            summary = (
-                "Investigation completed, but no risk score was provided; no action taken."
-            )
-            logger.warning(
-                "Missing risk score in investigation result for session %s (user %s).",
-                session_id,
-                user_id,
-            )
-            return {
-                "status": "completed",
-                "summary": summary,
-                "session_id": session_id,
-                "user_id": user_id,
-                "risk_score": risk_score,
-                "should_actuate": False,
-                "investigation_result": investigation_result,
-                "tool_events": tool_events,
-            }
+        should_actuate = False
+        if isinstance(actuator_result, dict):
+            should_actuate = not actuator_result.get("error")
 
-        should_actuate = risk_score >= self.risk_threshold
-        actuator_result: Optional[dict[str, Any]] = None
+        if justification and justification not in summary:
+            summary = f"{summary}\nJustification: {justification}"
 
-        if should_actuate:
-            ext_user_id = _extract_ext_user_id(case_file)
-            if not ext_user_id:
-                summary = (
-                    "High risk detected, but ext_user_id is missing; no actuation performed."
+        if risk_score is not None:
+            threshold_met = risk_score >= self.risk_threshold
+            if threshold_met and not should_actuate:
+                logger.warning(
+                    "Risk score %.2f meets threshold %.2f but no actuation was recorded.",
+                    risk_score,
+                    self.risk_threshold,
                 )
-                logger.error(
-                    "Unable to actuate for session %s (user %s): missing ext_user_id.",
-                    session_id,
-                    user_id,
+            if should_actuate and not threshold_met:
+                logger.warning(
+                    "Actuation executed even though risk score %.2f is below threshold %.2f.",
+                    risk_score,
+                    self.risk_threshold,
                 )
-                return {
-                    "status": "completed",
-                    "summary": summary,
-                    "session_id": session_id,
-                    "user_id": user_id,
-                    "risk_score": risk_score,
-                    "should_actuate": False,
-                    "investigation_result": investigation_result,
-                    "tool_events": tool_events,
-                }
-
-            actuator_payload = {
-                "action": "lock_account",
-                "ext_user_id": ext_user_id,
-                "reason": (
-                    f"Risk score {risk_score:.2f} on transaction {transaction_data.get('transaction_id')}"
-                ),
-                "case_file": case_file,
-            }
-            tool_events.append(
-                {
-                    "event": "call",
-                    "tool": "ActuatorAgent",
-                    "args": actuator_payload,
-                }
-            )
-            actuator_result = await delegate_to_actuator_agent(actuator_payload)
-            tool_events.append(
-                {
-                    "event": "response",
-                    "tool": "ActuatorAgent",
-                    "response": actuator_result,
-                }
-            )
-            summary = (
-                "High-risk investigation result forwarded to ActuatorAgent for account lockdown."
-            )
-        else:
-            summary = (
-                f"Risk score {risk_score:.2f} below threshold {self.risk_threshold:.2f}; no action taken."
-            )
-
-        if justification:
-            summary = f"{summary} Justification: {justification}"
 
         logger.info(
             "Orchestration completed for session %s (user %s). should_actuate=%s",
@@ -475,14 +527,21 @@ class OrchestratorService:
             "summary": summary,
             "session_id": session_id,
             "user_id": user_id,
-            "risk_score": risk_score,
-            "should_actuate": should_actuate,
-            "investigation_result": investigation_result,
+            "risk_threshold": self.risk_threshold,
             "tool_events": tool_events,
         }
 
+        if risk_score is not None:
+            response_payload["risk_score"] = risk_score
+        if justification:
+            response_payload["justification"] = justification
+        if ext_user_id:
+            response_payload["ext_user_id"] = ext_user_id
+        if investigation_result is not None:
+            response_payload["investigation_result"] = investigation_result
         if actuator_result is not None:
             response_payload["actuator_result"] = actuator_result
+        response_payload["should_actuate"] = should_actuate
 
         return response_payload
 
