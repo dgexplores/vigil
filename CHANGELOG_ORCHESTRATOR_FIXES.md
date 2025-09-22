@@ -1,5 +1,19 @@
 # Changelog: Orchestrator Agent CrashLoop Fixes
 
+# [2025-09-22] - cluster-validation-remediations
+
+### ✅ Fixes & Enhancements
+
+- **CriticAgent modernization**: Ported the critic service to the shared ADK `Runner` + in-memory session pattern so it streams Gemini responses, removing the deprecated `LlmAgent.send` call that was crashing every high-risk review.
+- **Resilient orchestration alerts**: Lifted the transaction monitor's A2A HTTP timeout to 30s to accommodate multi-hop orchestration cycles. This reduces the 5s JSON-RPC timeout spikes observed under load.
+- **GenAI toolbox schema fix**: Updated `get_user_details_by_account` SQL to match the Bank of Anthos `users` table (`accountid`) so investigation agents receive real profile metadata instead of 400 errors.
+- **Operational record**: Added `docs/VIGIL_CLUSTER_VALIDATION_2025-09-22.md` summarizing the live cluster evaluation, log evidence, and agreed next actions.
+
+### 📋 Deployment Notes
+
+- Requires rebuilding and redeploying critic, transaction monitor, and genai-toolbox images/config to pick up the changes.
+- After rollout, re-run the manual A2A smoke test to confirm ActuatorAgent hand-offs complete with the restored critic verdicts.
+
 # [2025-09-21] - feature/orchestrator-a2a-delegation
 
 ### 🚀 Enhancements

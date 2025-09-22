@@ -16,13 +16,15 @@ import os
 import logging
 import json
 import uuid
-import asyncio
 from typing import Dict, Any
 
 from fastapi import FastAPI, HTTPException
 import uvicorn
 from google.adk.agents import LlmAgent
 from google.adk.models import Gemini
+from google.genai import types
+from google.adk.sessions.in_memory_session_service import InMemorySessionService
+from google.adk.runners import Runner
 from a2a.types import SendMessageRequest, SendMessageResponse, SendMessageSuccessResponse, Message, TextPart, Role
 
 # Configure logging
@@ -54,6 +56,13 @@ class CriticService:
             model=Gemini(api_key=GEMINI_API_KEY),
             instruction=CRITIC_PROMPT,
         )
+        self.session_service = InMemorySessionService()
+        self.runner = Runner(
+            app_name="critic_agent_app",
+            agent=self.llm_agent,
+            session_service=self.session_service,
+        )
+        self.default_user_id = "orchestrator"
         logger.info("CriticService initialized.")
 
     async def critique_case(self, case_file_data: Dict[str, Any]) -> Dict[str, Any]:
@@ -70,13 +79,63 @@ class CriticService:
 
         try:
             logger.info("Sending case file to LLM for critique...")
-            # Use async/await pattern for LLM processing
-            llm_response = await asyncio.to_thread(self.llm_agent.send, prompt)
-            # The response from the LLM is expected to be a JSON string.
-            # We need to clean it up in case the LLM adds markdown backticks.
-            cleaned_response = llm_response.strip().replace("```json", "").replace("```", "").strip()
+            message_content = types.Content(
+                role="user",
+                parts=[types.Part(text=prompt)],
+            )
+
+            transaction = case_file_data.get("transaction_data", {}) if isinstance(case_file_data, dict) else {}
+            user_id = (
+                transaction.get("from_account_id")
+                or case_file_data.get("user_id")
+                if isinstance(case_file_data, dict)
+                else None
+            ) or self.default_user_id
+
+            session_id = str(uuid.uuid4())
+            await self.session_service.create_session(
+                app_name=self.runner.app_name,
+                user_id=user_id,
+                session_id=session_id,
+            )
+
+            final_text = ""
+            last_text = ""
+
+            async for event in self.runner.run_async(
+                user_id=user_id,
+                session_id=session_id,
+                new_message=message_content,
+            ):
+                if getattr(event, "content", None) and getattr(event.content, "parts", None):
+                    text_segments = [
+                        part.text.strip()
+                        for part in event.content.parts
+                        if getattr(part, "text", None)
+                    ]
+                    if text_segments:
+                        last_text = "\n".join(filter(None, text_segments))
+
+                if getattr(event, "is_final_response", None) and event.is_final_response():
+                    final_text = last_text
+
+            llm_response = final_text or last_text
+            if not llm_response:
+                raise ValueError("Received empty response from critic LLM")
+
+            cleaned_response = (
+                llm_response.strip()
+                .replace("```json", "")
+                .replace("```", "")
+                .strip()
+            )
             verdict = json.loads(cleaned_response)
-            logger.info(f"Received verdict from LLM: {verdict}")
+            logger.info(
+                "Received verdict from LLM for session %s (user %s): %s",
+                session_id,
+                user_id,
+                verdict,
+            )
         except Exception as e:
             logger.error(f"Error processing LLM response: {e}", exc_info=True)
             return {"error": f"Failed to get verdict from LLM: {e}", "llm_response": str(e)}
