@@ -53,7 +53,7 @@ class CriticService:
         logger.info("Initializing CriticService...")
         self.llm_agent = LlmAgent(
             name="critic_agent",
-            model=Gemini(api_key=GEMINI_API_KEY),
+            model=Gemini(api_key=GEMINI_API_KEY, model="gemini-2.5-flash"),
             instruction=CRITIC_PROMPT,
         )
         self.session_service = InMemorySessionService()

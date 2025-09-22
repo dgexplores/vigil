@@ -267,7 +267,7 @@ class OrchestratorService:
         logger.info("Initializing OrchestratorService...")
         self.llm_agent = LlmAgent(
             name="orchestrator_agent",
-            model=Gemini(api_key=GEMINI_API_KEY),
+            model=Gemini(api_key=GEMINI_API_KEY, model="gemini-2.5-flash"),
             instruction=ORCHESTRATOR_PROMPT,
             tools=[
                 investigation_tool,

@@ -56,7 +56,7 @@ class InvestigationService:
         self.genal_toolbox_url = GENAL_TOOLBOX_URL
         self.llm_agent = LlmAgent(
             name="investigation_agent",
-            model=Gemini(api_key=GEMINI_API_KEY),
+            model=Gemini(api_key=GEMINI_API_KEY, model="gemini-2.5-flash"),
             instruction=INVESTIGATION_PROMPT,
         )
         self.session_service = InMemorySessionService()
