@@ -194,36 +194,7 @@ To test the system, you can manually insert a high-value transaction into the Ba
 
 ## Developer's Guide
 
-This section provides technical details for developers working on the Vigil AI Fraud Shield project.
-
-### Technology Stack
-
-*   **Google Kubernetes Engine (GKE):** The deployment platform for the entire system.
-*   **Google AI Models (Gemini):** Powers the intelligence of the Investigation agent.
-*   **Agent Development Kit (ADK):** The toolkit used to build the agents.
-*   **Model Context Protocol (MCP):** Used for communication between the agents and the GenAl Toolbox.
-*   **Agent2Agent (A2A) protocol:** Facilitates communication and orchestration between the agents.
-
-### Developer Notes
-
-This section contains key learnings and best practices for working with the project's technology stack.
-
-*   **A2A is a separate protocol:** The Agent2Agent (A2A) protocol is not part of the Google ADK. It is a separate package (`a2a-sdk`) and should be imported accordingly.
-*   **Use the ClientFactory:** The modern A2A API uses `ClientFactory.create_client_with_jsonrpc_transport()` to create clients. The legacy `A2AClient` constructor is deprecated.
-*   **LlmAgent requires a name:** The `LlmAgent` constructor requires a `name` field, which must be a valid Python identifier (e.g., "orchestrator_agent").
-*   **FunctionTool is minimal:** The `FunctionTool` constructor only accepts the function as an argument. It does not take `name` or `description` parameters.
-*   **No decorators:** The current version of the ADK does not use `@tool` or `@rpc` decorators.
-
-### FastAPI-based Architecture
-
-*   The agents have been refactored to use a FastAPI-based architecture for handling A2A communication. This provides a more robust and modern approach than the legacy ADK RPC server.
-*   The standard port for the FastAPI servers is `8000`.
-*   A `/health` endpoint is available on each agent for Kubernetes readiness and liveness probes.
-
-### Docker Best Practices
-
-*   **Specify file paths:** When building Docker images from the root of the repository, be sure to specify the full path to the files you want to copy (e.g., `COPY vigil-system/orchestrator_agent/agent.py /app/`). Do not rely on copying the entire directory (`COPY . /app/`).
-*   **Build context matters:** Always be aware of the build context when running `docker build` commands to ensure that the Dockerfile can find all the necessary files.
+For technical details on the project's architecture, technology stack, and developer best practices, please see the [Developer's Guide](DEVELOPERS.md).
 
 ## Troubleshooting
 
@@ -255,3 +226,9 @@ This section provides solutions to common issues that you may encounter when wor
 *   **Symptom:** Errors like `'str' object has no attribute 'get'` when processing responses from the `genai-toolbox`.
 *   **Cause:** The `genai-toolbox` may return JSON data as a string within a `result` field (e.g., `{"result": "[{...}]"}`).
 *   **Solution:** Before processing the response, check if the data is a string. If it is, parse it using `json.loads()`.
+
+## Acknowledgements
+
+A special thanks to the Google team and developers responsible for the GKE 10th Birthday Hackathon, and for creating the powerful SDKs and technologies that made this project possible.
+
+This project was developed with the assistance of several agentic AI coding assistants, including Google Labs' Jules, OpenAI's Codex, and Warp Terminal's AI.
