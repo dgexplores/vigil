@@ -12,35 +12,7 @@ The Vigil architecture is a sophisticated, decoupled, and secure Hierarchical Mu
 
 ### Architectural Diagram
 
-```mermaid
-graph TD
-    subgraph "GKE Autopilot Cluster (Default Namespace)"
-        subgraph "Bank of Anthos Services"
-            UserService[userservice] --> AccountsDB[(Accounts DB)]
-            ContactsService[contacts] --> AccountsDB
-            LedgerWriter[ledgerwriter] --> LedgerDB[(Ledger DB)]
-            BalanceReader[balancereader] --> LedgerDB
-            TransactionHistory[transactionhistory] --> LedgerDB
-        end
-
-        subgraph "Vigil Agentic Services"
-            UI[User Interface / API Gateway] -- HTTP/gRPC --> OrchestratorAgent
-
-            OrchestratorAgent -- A2A Protocol --> TransactionMonitorAgent
-            OrchestratorAgent -- A2A Protocol --> InvestigationAgent
-            OrchestratorAgent -- A2A Protocol --> ActuatorAgent
-
-            TransactionMonitorAgent -- MCP (HTTP) --> GenAlToolbox
-            InvestigationAgent -- MCP (HTTP) --> GenAlToolbox
-            ActuatorAgent -- MCP (HTTP) --> GenAlToolbox
-
-            GenAlToolbox -- SQL --> AccountsDB
-            GenAlToolbox -- SQL --> LedgerDB
-        end
-    end
-
-    User[External System/User] --> UI
-```
+<img width="3840" height="1848" alt="vigil_system _ Mermaid Chart-2025-09-22-203418" src="https://github.com/user-attachments/assets/c99292af-76db-4fe7-8318-88c514952b66" />
 
 ### Component Roles & Responsibilities
 
