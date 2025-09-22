@@ -1,1 +1,4 @@
 google-adk
+a2a-sdk[http-server]
+fastapi
+uvicorn[standard]
