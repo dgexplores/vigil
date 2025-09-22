@@ -15,18 +15,11 @@
 import os
 import logging
 import json
-import asyncio
 import uuid
-from typing import Any
+from typing import Any, Optional
 
 from fastapi import FastAPI, HTTPException
 import uvicorn
-from google.adk.agents import LlmAgent
-from google.adk.tools import FunctionTool
-from google.adk.models import Gemini
-from google.genai import types
-from google.adk.sessions.in_memory_session_service import InMemorySessionService
-from google.adk.runners import Runner
 import httpx
 from a2a.client.legacy import A2AClient
 from a2a.types import (
@@ -46,14 +39,15 @@ logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(level
 logger = logging.getLogger(__name__)
 
 # Get config from environment variables
-INVESTIGATION_AGENT_URL = os.environ.get("INVESTIGATION_AGENT_SERVICE_URL", "http://investigation-agent-service")
-CRITIC_AGENT_URL = os.environ.get("CRITIC_AGENT_SERVICE_URL", "http://critic-agent-service")
-ACTUATOR_AGENT_URL = os.environ.get("ACTUATOR_AGENT_SERVICE_URL", "http://actuator-agent-service")
-GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY")
-
-ORCHESTRATOR_PROMPT = """
-You are 'Vigil Control', a master orchestrator for a team of AI fraud detection agents. Your mission is to analyze high-level alerts and delegate tasks to the appropriate specialized agent using the available A2A tools. For a new transaction alert, you must first delegate to the 'InvestigationAgent'. If the investigation yields a high-risk score, you must then delegate to the 'CriticAgent' for verification. Only after the CriticAgent concurs should you delegate to the 'ActuatorAgent' to take protective action. Sequence your calls logically and precisely.
-"""
+INVESTIGATION_AGENT_URL = os.environ.get(
+    "INVESTIGATION_AGENT_SERVICE_URL",
+    "http://investigation-agent-service",
+)
+ACTUATOR_AGENT_URL = os.environ.get(
+    "ACTUATOR_AGENT_SERVICE_URL",
+    "http://actuator-agent-service",
+)
+RISK_SCORE_THRESHOLD = os.environ.get("RISK_SCORE_THRESHOLD", "7")
 
 # Cache for downstream A2A clients keyed by agent label.
 _client_registry: dict[str, A2AClient] = {}
@@ -176,6 +170,83 @@ def _normalize_payload(payload: Any, agent_label: str) -> str | None:
     return None
 
 
+def _parse_float(value: Any) -> Optional[float]:
+    """Attempt to convert a value to float, returning None on failure."""
+    if value is None:
+        return None
+    if isinstance(value, (int, float)):
+        return float(value)
+    if isinstance(value, str):
+        candidate = value.strip().replace("%", "")
+        if not candidate:
+            return None
+        try:
+            return float(candidate)
+        except ValueError:
+            return None
+    return None
+
+
+def _extract_risk_score(case_file: Any) -> Optional[float]:
+    """Extract a numeric risk score from the investigation case file."""
+    if not isinstance(case_file, dict):
+        return None
+
+    fraud_analysis = case_file.get("fraud_analysis")
+    if isinstance(fraud_analysis, dict):
+        score = _parse_float(fraud_analysis.get("risk_score"))
+        if score is not None:
+            return score
+
+    # Some responses may return risk_score at the top level
+    return _parse_float(case_file.get("risk_score"))
+
+
+def _extract_justification(case_file: Any) -> Optional[str]:
+    """Retrieve a textual justification from the case file if available."""
+    if not isinstance(case_file, dict):
+        return None
+
+    fraud_analysis = case_file.get("fraud_analysis")
+    if isinstance(fraud_analysis, dict):
+        justification = fraud_analysis.get("justification")
+        if isinstance(justification, str):
+            return justification
+
+    justification = case_file.get("justification")
+    if isinstance(justification, str):
+        return justification
+
+    return None
+
+
+def _extract_ext_user_id(case_file: Any) -> Optional[str]:
+    """Extract ext_user_id from the case file using multiple heuristics."""
+    if not isinstance(case_file, dict):
+        return None
+
+    transaction_data = case_file.get("transaction_data")
+    if isinstance(transaction_data, dict):
+        for key in ("ext_user_id", "user_id", "from_account_id"):
+            value = transaction_data.get(key)
+            if isinstance(value, str) and value.strip():
+                return value.strip()
+
+    user_details = case_file.get("user_details")
+    if isinstance(user_details, dict):
+        candidate = user_details.get("ext_user_id")
+        if isinstance(candidate, str) and candidate.strip():
+            return candidate.strip()
+    elif isinstance(user_details, list):
+        for entry in user_details:
+            if isinstance(entry, dict):
+                candidate = entry.get("ext_user_id")
+                if isinstance(candidate, str) and candidate.strip():
+                    return candidate.strip()
+
+    return None
+
+
 async def _delegate_via_a2a(
     *,
     agent_label: str,
@@ -227,18 +298,6 @@ async def delegate_to_investigation_agent(transaction_details: Any) -> dict[str,
     )
 
 
-async def delegate_to_critic_agent(case_file: Any) -> dict[str, Any]:
-    """Delegates the review of a case file to the CriticAgent."""
-    logger.info("Delegating to CriticAgent with case file payload.")
-    return await _delegate_via_a2a(
-        agent_label="CriticAgent",
-        cache_key="critic_agent",
-        service_url=CRITIC_AGENT_URL,
-        payload_prefix="critique_case:",
-        payload=case_file,
-    )
-
-
 async def delegate_to_actuator_agent(action_command: Any) -> dict[str, Any]:
     """Delegates a validated action to the ActuatorAgent."""
     logger.info("Delegating to ActuatorAgent with command payload.")
@@ -250,12 +309,6 @@ async def delegate_to_actuator_agent(action_command: Any) -> dict[str, Any]:
         payload=action_command,
     )
 
-# Create function tools
-investigation_tool = FunctionTool(delegate_to_investigation_agent)
-critic_tool = FunctionTool(delegate_to_critic_agent)
-actuator_tool = FunctionTool(delegate_to_actuator_agent)
-
-
 # Create FastAPI app for A2A server functionality
 app = FastAPI(title="Orchestrator Agent A2A Server")
 
@@ -265,111 +318,78 @@ orchestrator_service = None
 class OrchestratorService:
     def __init__(self):
         logger.info("Initializing OrchestratorService...")
-        self.llm_agent = LlmAgent(
-            name="orchestrator_agent",
-            model=Gemini(api_key=GEMINI_API_KEY, model="gemini-2.5-flash"),
-            instruction=ORCHESTRATOR_PROMPT,
-            tools=[
-                investigation_tool,
-                critic_tool,
-                actuator_tool,
-            ],
-        )
-        self.session_service = InMemorySessionService()
-        self.runner = Runner(
-            app_name="vigil_orchestrator_app",
-            agent=self.llm_agent,
-            session_service=self.session_service,
-        )
+        threshold = _parse_float(RISK_SCORE_THRESHOLD)
+        if threshold is None:
+            logger.warning(
+                "Invalid RISK_SCORE_THRESHOLD value '%s'; defaulting to 7.0",
+                RISK_SCORE_THRESHOLD,
+            )
+            threshold = 7.0
+        self.risk_threshold = threshold
         self.default_user_id = "transaction-monitor"
-        logger.info("OrchestratorService initialized.")
+        logger.info(
+            "OrchestratorService initialized (risk threshold=%s).",
+            self.risk_threshold,
+        )
 
     async def process_transaction_alert(self, transaction_data: dict) -> dict:
-        """
-        This method is called by the TransactionMonitorAgent.
-        It triggers the LLM agent to start the orchestration flow.
-        """
-        logger.info(f"Received transaction alert: {transaction_data}")
-        initial_prompt = (
-            "A new potentially fraudulent transaction has been detected. "
-            "Here are the details:\n"
-            f"{json.dumps(transaction_data, indent=2)}\n"
-            "Your task is to follow the standard procedure: "
-            "1. Delegate to the InvestigationAgent. "
-            "2. Analyze the result. "
-            "3. If necessary, delegate to the CriticAgent. "
-            "4. Analyze the result. "
-            "5. If necessary, delegate to the ActuatorAgent to take action. "
-            "Provide a summary of the outcome."
+        """Take action on a high-risk transaction using downstream agents."""
+        logger.info("Received transaction alert: %s", transaction_data)
+
+        user_id = (
+            transaction_data.get("from_account_id")
+            or transaction_data.get("user_id")
+            or self.default_user_id
         )
-        try:
-            message_content = types.Content(
-                role="user",
-                parts=[types.Part(text=initial_prompt)],
+        session_id = str(uuid.uuid4())
+
+        tool_events: list[dict[str, Any]] = []
+
+        # Step 1: Investigate the transaction
+        tool_events.append(
+            {
+                "event": "call",
+                "tool": "InvestigationAgent",
+                "args": {"transaction": transaction_data},
+            }
+        )
+        investigation_result = await delegate_to_investigation_agent(transaction_data)
+        tool_events.append(
+            {
+                "event": "response",
+                "tool": "InvestigationAgent",
+                "response": investigation_result,
+            }
+        )
+
+        if investigation_result.get("error"):
+            summary = (
+                "InvestigationAgent returned an error; unable to proceed to actuation."
             )
-
-            user_id = (
-                transaction_data.get("from_account_id")
-                or transaction_data.get("user_id")
-                or self.default_user_id
+            logger.error(
+                "Investigation failed for session %s (user %s): %s",
+                session_id,
+                user_id,
+                investigation_result.get("error"),
             )
-            session_id = str(uuid.uuid4())
-            await self.session_service.create_session(
-                app_name=self.runner.app_name,
-                user_id=user_id,
-                session_id=session_id,
+            return {
+                "status": "error",
+                "summary": summary,
+                "session_id": session_id,
+                "user_id": user_id,
+                "tool_events": tool_events,
+            }
+
+        case_file = investigation_result.get("data")
+        risk_score = _extract_risk_score(case_file)
+        justification = _extract_justification(case_file)
+
+        if risk_score is None:
+            summary = (
+                "Investigation completed, but no risk score was provided; no action taken."
             )
-
-            tool_events: list[dict[str, Any]] = []
-            final_text = ""
-            last_text = ""
-
-            async for event in self.runner.run_async(
-                user_id=user_id,
-                session_id=session_id,
-                new_message=message_content,
-            ):
-                try:
-                    function_calls = event.get_function_calls()
-                except AttributeError:
-                    function_calls = []
-                for call in function_calls or []:
-                    tool_events.append(
-                        {
-                            "event": "call",
-                            "tool": call.name,
-                            "args": call.args,
-                        }
-                    )
-
-                try:
-                    function_responses = event.get_function_responses()
-                except AttributeError:
-                    function_responses = []
-                for response in function_responses or []:
-                    tool_events.append(
-                        {
-                            "event": "response",
-                            "tool": response.name,
-                            "response": response.response,
-                        }
-                    )
-
-                text_segments: list[str] = []
-                if getattr(event, "content", None) and getattr(event.content, "parts", None):
-                    for part in event.content.parts:
-                        if getattr(part, "text", None):
-                            text_segments.append(part.text.strip())
-
-                if text_segments:
-                    last_text = "\n".join(filter(None, text_segments))
-
-                if getattr(event, "is_final_response", None) and event.is_final_response():
-                    final_text = last_text
-
-            summary = final_text or last_text or "No summary produced by orchestrator."
-            logger.info(
-                "Orchestration flow completed for session %s (user %s).",
+            logger.warning(
+                "Missing risk score in investigation result for session %s (user %s).",
                 session_id,
                 user_id,
             )
@@ -378,15 +398,93 @@ class OrchestratorService:
                 "summary": summary,
                 "session_id": session_id,
                 "user_id": user_id,
+                "risk_score": risk_score,
+                "should_actuate": False,
+                "investigation_result": investigation_result,
                 "tool_events": tool_events,
             }
-        except Exception as e:  # pragma: no cover - defensive logging
-            logger.error(
-                "An error occurred during the orchestration flow: %s",
-                e,
-                exc_info=True,
+
+        should_actuate = risk_score >= self.risk_threshold
+        actuator_result: Optional[dict[str, Any]] = None
+
+        if should_actuate:
+            ext_user_id = _extract_ext_user_id(case_file)
+            if not ext_user_id:
+                summary = (
+                    "High risk detected, but ext_user_id is missing; no actuation performed."
+                )
+                logger.error(
+                    "Unable to actuate for session %s (user %s): missing ext_user_id.",
+                    session_id,
+                    user_id,
+                )
+                return {
+                    "status": "completed",
+                    "summary": summary,
+                    "session_id": session_id,
+                    "user_id": user_id,
+                    "risk_score": risk_score,
+                    "should_actuate": False,
+                    "investigation_result": investigation_result,
+                    "tool_events": tool_events,
+                }
+
+            actuator_payload = {
+                "action": "lock_account",
+                "ext_user_id": ext_user_id,
+                "reason": (
+                    f"Risk score {risk_score:.2f} on transaction {transaction_data.get('transaction_id')}"
+                ),
+                "case_file": case_file,
+            }
+            tool_events.append(
+                {
+                    "event": "call",
+                    "tool": "ActuatorAgent",
+                    "args": actuator_payload,
+                }
             )
-            return {"status": "error", "message": str(e)}
+            actuator_result = await delegate_to_actuator_agent(actuator_payload)
+            tool_events.append(
+                {
+                    "event": "response",
+                    "tool": "ActuatorAgent",
+                    "response": actuator_result,
+                }
+            )
+            summary = (
+                "High-risk investigation result forwarded to ActuatorAgent for account lockdown."
+            )
+        else:
+            summary = (
+                f"Risk score {risk_score:.2f} below threshold {self.risk_threshold:.2f}; no action taken."
+            )
+
+        if justification:
+            summary = f"{summary} Justification: {justification}"
+
+        logger.info(
+            "Orchestration completed for session %s (user %s). should_actuate=%s",
+            session_id,
+            user_id,
+            should_actuate,
+        )
+
+        response_payload: dict[str, Any] = {
+            "status": "completed",
+            "summary": summary,
+            "session_id": session_id,
+            "user_id": user_id,
+            "risk_score": risk_score,
+            "should_actuate": should_actuate,
+            "investigation_result": investigation_result,
+            "tool_events": tool_events,
+        }
+
+        if actuator_result is not None:
+            response_payload["actuator_result"] = actuator_result
+
+        return response_payload
 
 
 # A2A FastAPI endpoints

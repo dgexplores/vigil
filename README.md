@@ -28,7 +28,6 @@ graph TD
 
             OrchestratorAgent -- A2A Protocol --> TransactionMonitorAgent
             OrchestratorAgent -- A2A Protocol --> InvestigationAgent
-            OrchestratorAgent -- A2A Protocol --> CriticAgent
             OrchestratorAgent -- A2A Protocol --> ActuatorAgent
 
             TransactionMonitorAgent -- MCP (HTTP) --> GenAlToolbox
@@ -47,25 +46,24 @@ graph TD
 
 | Component                | Technology/Protocol       | Role & Responsibility                                                                                                                                                           |
 | :----------------------- | :------------------------ | :------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| **Orchestrator Agent**   | ADK (LlmAgent)            | The system's central "brain." Receives high-level tasks, plans multi-step workflows, and delegates sub-tasks to specialized agents using the A2A protocol.                      |
+| **Orchestrator Agent**   | FastAPI + A2A             | The system's central "brain." Receives alerts, runs rule-based orchestration, and delegates to the Investigation and Actuator agents when risk thresholds are exceeded.        |
 | **TransactionMonitor Agent** | ADK (Loop or CustomAgent) | The system's sensor. Continuously monitors the Ledger DB for new transactions, flags anomalies, and initiates an investigation via an A2A call to the Orchestrator.            |
 | **Investigation Agent**  | ADK (LlmAgent with Gemini) | The digital detective. Gathers comprehensive context on a flagged transaction using various database tools. Synthesizes findings into a "case file" for review.               |
-| **Critic Agent**         | ADK (LlmAgent with Gemini) | The quality assurance layer. Receives the case file and adversarially challenges the initial suspicion to reduce false positives before any action is taken. A key innovation. |
 | **Actuator Agent**       | ADK (CustomAgent)         | The enforcement arm. Receives validated commands from the Orchestrator and executes actions (e.g., locking an account) by invoking tools on the GenAl Toolbox.                   |
 | **GenAl Toolbox Service**| GenAl Toolbox (Go binary) | The secure MCP server. Connects to both Bank of Anthos databases and exposes pre-defined SQL queries as "tools" for the agents to consume.                                       |
 
 ## Key Features
 
-*   **Hierarchical Multi-Agent System:** A sophisticated architecture with specialized agents for monitoring, investigation, quality assurance, and action, all coordinated by a central orchestrator.
+*   **Hierarchical Multi-Agent System:** A sophisticated architecture with specialized agents for monitoring, investigation, and action, all coordinated by a central orchestrator.
 *   **Proactive Fraud Detection:** The system continuously monitors transactions and proactively identifies and mitigates potential fraud before it can cause harm.
-*   **Adversarial Quality Assurance:** The innovative **Critic Agent** acts as a skeptical reviewer, challenging the findings of the Investigation Agent to reduce false positives and ensure high-quality analysis.
+*   **Risk-Gated Enforcement:** The Orchestrator uses investigation results to compute a risk score and only escalates to the Actuator Agent when a configurable threshold is exceeded.
 *   **Secure Data Access:** The **GenAl Toolbox** provides a secure bridge to the application's databases, exposing only the necessary data through a well-defined API.
 *   **Seamless Integration:** The Vigil System interacts with the existing Bank of Anthos application through its APIs, demonstrating how agentic AI can enhance legacy systems without modifying their core code.
 
 ## Technology Stack
 
 *   **Google Kubernetes Engine (GKE):** The deployment platform for the entire system.
-*   **Google AI Models (Gemini):** Powers the intelligence of the Investigation and Critic agents.
+*   **Google AI Models (Gemini):** Powers the intelligence of the Investigation agent.
 *   **Agent Development Kit (ADK):** The toolkit used to build the agents.
 *   **Model Context Protocol (MCP):** Used for communication between the agents and the GenAl Toolbox.
 *   **Agent2Agent (A2A) protocol:** Facilitates communication and orchestration between the agents.
@@ -129,9 +127,6 @@ docker push "${IMAGE_PREFIX}/orchestrator-agent:latest"
 docker build -t "${IMAGE_PREFIX}/investigation-agent:latest" -f vigil-system/investigation_agent/Dockerfile .
 docker push "${IMAGE_PREFIX}/investigation-agent:latest"
 
-docker build -t "${IMAGE_PREFIX}/critic-agent:latest" -f vigil-system/critic_agent/Dockerfile .
-docker push "${IMAGE_PREFIX}/critic-agent:latest"
-
 docker build -t "${IMAGE_PREFIX}/actuator-agent:latest" -f vigil-system/actuator_agent/Dockerfile .
 docker push "${IMAGE_PREFIX}/actuator-agent:latest"
 ```
@@ -160,10 +155,6 @@ kubectl apply -f vigil-system/orchestrator_agent/orchestrator_agent_service.yaml
 kubectl apply -f vigil-system/investigation_agent/investigation_agent_deployment.yaml
 kubectl apply -f vigil-system/investigation_agent/investigation_agent_service.yaml
 
-# Critic Agent
-kubectl apply -f vigil-system/critic_agent/critic_agent_deployment.yaml
-kubectl apply -f vigil-system/critic_agent/critic_agent_service.yaml
-
 # Actuator Agent
 kubectl apply -f vigil-system/actuator_agent/actuator_agent_deployment.yaml
 kubectl apply -f vigil-system/actuator_agent/actuator_agent_service.yaml
@@ -183,5 +174,7 @@ Once deployed, the Vigil System will automatically begin monitoring the Bank of 
 1.  **Detection:** The **TransactionMonitorAgent** detects a high-value transaction and flags it.
 2.  **Initiation:** The **TransactionMonitorAgent** sends an alert to the **OrchestratorAgent**.
 3.  **Investigation:** The **OrchestratorAgent** delegates the investigation to the **InvestigationAgent**, which gathers details about the transaction and the user.
-4.  **Critique:** The **OrchestratorAgent** sends the investigation findings to the **CriticAgent** for adversarial review.
-5.  **Action:** If the **CriticAgent** concurs that the transaction is fraudulent, the **OrchestratorAgent** commands the **ActuatorAgent** to take action, such as locking the user's account.
+4.  **Assessment:** The **OrchestratorAgent** interprets the investigation results and compares the reported risk score to the configured threshold.
+5.  **Action:** If the risk score meets or exceeds the threshold, the **OrchestratorAgent** commands the **ActuatorAgent** to take action, such as locking the user's account.
+
+The default risk threshold is `7`. You can override it by setting the `RISK_SCORE_THRESHOLD` environment variable on the Orchestrator deployment.

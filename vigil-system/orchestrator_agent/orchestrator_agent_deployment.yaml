@@ -30,12 +30,7 @@ spec:
         env:
         - name: INVESTIGATION_AGENT_SERVICE_URL
           value: "http://investigation-agent-service"
-        - name: CRITIC_AGENT_SERVICE_URL
-          value: "http://critic-agent-service"
         - name: ACTUATOR_AGENT_SERVICE_URL
           value: "http://actuator-agent-service"
-        - name: GEMINI_API_KEY
-          valueFrom:
-            secretKeyRef:
-              name: gemini-api-key
-              key: key
+        - name: RISK_SCORE_THRESHOLD
+          value: "7"
