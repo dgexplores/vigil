@@ -24,6 +24,6 @@ spec:
         - name: ORCHESTRATOR_SERVICE_URL
           value: "http://orchestrator-agent-service"
         - name: POLL_INTERVAL
-          value: "30"
+          value: "5"
         - name: FRAUD_THRESHOLD
           value: "1000.0"
