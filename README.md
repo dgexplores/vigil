@@ -12,7 +12,7 @@
 
 **Vigil** is a proactive, hierarchical multi-agent system that enhances the security of microservice-based financial applications. It uses agentic AI to detect and mitigate financial fraud in real-time.
 
-> 🏆 **Honorable Mention** — GKE 10th Birthday Hackathon (LATAM Region)
+> 🏆 **Honorable Mention** — GKE Turns 10 Hackathon
 
 📺 [**Watch the Demo**](https://www.youtube.com/watch?v=S7xQgOoeFOw) · 📦 [**View Repository**](https://github.com/ayanliger/gke-turns10-hackathon-vigil)
 
