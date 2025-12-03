@@ -1,234 +1,189 @@
 # Vigil AI Fraud Shield
 
-Vigil is a proactive, hierarchical multi-agent system that enhances the security of microservice-based financial applications. It uses agentic AI to detect and mitigate financial fraud in real-time. This project was developed for the Google Kubernetes Engine (GKE) 10th Birthday Hackathon.
+[![Status](https://img.shields.io/badge/Status-Completed-success?style=flat-square)](https://github.com/ayanliger/gke-turns10-hackathon-vigil)
+[![Hackathon](https://img.shields.io/badge/GKE%20Turns%2010-Honorable%20Mention-blue?style=flat-square&logo=google-cloud)](https://github.com/ayanliger/gke-turns10-hackathon-vigil)
+[![Demo](https://img.shields.io/badge/Demo-YouTube-red?style=flat-square&logo=youtube)](https://www.youtube.com/watch?v=S7xQgOoeFOw)
+[![License](https://img.shields.io/badge/License-MIT-yellow?style=flat-square)](LICENSE)
+
+[![Google Cloud](https://img.shields.io/badge/Google%20Cloud-GKE-4285F4?style=flat-square&logo=google-cloud&logoColor=white)](https://cloud.google.com/kubernetes-engine)
+[![Gemini](https://img.shields.io/badge/Gemini-2.5%20Flash-8E75B2?style=flat-square&logo=google&logoColor=white)](https://ai.google.dev/)
+[![Python](https://img.shields.io/badge/Python-3.11-3776AB?style=flat-square&logo=python&logoColor=white)](https://python.org)
+[![Go](https://img.shields.io/badge/Go-1.23-00ADD8?style=flat-square&logo=go&logoColor=white)](https://go.dev)
+
+**Vigil** is a proactive, hierarchical multi-agent system that enhances the security of microservice-based financial applications. It uses agentic AI to detect and mitigate financial fraud in real-time.
+
+> 🏆 **Honorable Mention** — GKE 10th Birthday Hackathon (LATAM Region)
+
+📺 [**Watch the Demo**](https://www.youtube.com/watch?v=S7xQgOoeFOw) · 📦 [**View Repository**](https://github.com/ayanliger/gke-turns10-hackathon-vigil)
+
+## Architecture Overview
+
+Vigil is a decoupled multi-agent system where a central **Orchestrator Agent** coordinates specialized agents for monitoring, investigation, and enforcement. The system integrates with the [Bank of Anthos](https://github.com/GoogleCloudPlatform/bank-of-anthos) sample banking application.
+
+```
+┌─────────────────────────────────────────────────────────────────────────────┐
+│                              VIGIL SYSTEM                                   │
+├─────────────────────────────────────────────────────────────────────────────┤
+│                                                                             │
+│   ┌──────────────────┐         A2A          ┌──────────────────────┐        │
+│   │  Transaction     │ ───────────────────► │    Orchestrator      │        │
+│   │  Monitor Agent   │                      │    Agent             │        │
+│   │                  │                      │                      │        │
+│   │  (Python/asyncio)│                      │  (ADK LlmAgent +     │        │
+│   └────────┬─────────┘                      │   Gemini 2.5 Flash)  │        │
+│            │                                └───────────┬──────────┘        │
+│            │ REST                                 A2A   │   A2A             │
+│            │                           ┌────────────────┴────────┐          │
+│            ▼                           ▼                         ▼          │
+│   ┌──────────────────┐       ┌──────────────────┐     ┌─────────────────┐   │
+│   │  GenAI Toolbox   │       │  Investigation   │     │  Actuator       │   │
+│   │  Service         │◄──────│  Agent           │     │  Agent          │   │
+│   │                  │ REST  │                  │     │                 │   │
+│   │  (Go binary)     │◄──────│  (ADK LlmAgent)  │     │  (FastAPI)      │   │
+│   │                  │       └──────────────────┘     └────────┬────────┘   │
+│   │                  │                                         │ REST       │
+│   │                  │◄────────────────────────────────────────┘            │
+│   └────────┬─────────┘                                                      │
+│            │                                                                │
+│            │ PostgreSQL                                                     │
+│            ▼                                                                │
+│   ┌──────────────────────────────────────┐                                  │
+│   │  Bank of Anthos Databases            │                                  │
+│   │  (accounts-db, ledger-db)            │                                  │
+│   └──────────────────────────────────────┘                                  │
+│                                                                             │
+└─────────────────────────────────────────────────────────────────────────────┘
+```
+
+## Components
+
+| Component | Technology Stack | Description |
+|-----------|------------------|-------------|
+| **Transaction Monitor** | Python, asyncio, A2A SDK | Continuously polls the ledger database for new transactions. Flags high-value transactions and sends alerts to the Orchestrator via A2A protocol. |
+| **Orchestrator Agent** | Google ADK (LlmAgent), Gemini 2.5 Flash, FastAPI, A2A | Central coordinator. Uses an LLM to analyze alerts, delegate investigations, compute risk scores, and decide on enforcement actions. |
+| **Investigation Agent** | Google ADK (LlmAgent), Gemini 2.5 Flash, FastAPI, A2A | Gathers context about flagged transactions (user profile, transaction history) and produces a risk assessment with justification. |
+| **Actuator Agent** | FastAPI, A2A SDK | Executes enforcement actions (e.g., account locking) by invoking tools on the GenAI Toolbox. |
+| **GenAI Toolbox** | Go binary, REST API, PostgreSQL | Provides secure, pre-defined database operations as REST endpoints. Agents invoke tools like `get_user_details`, `lock_account`, etc. |
 
 ## Key Features
 
-*   **Hierarchical Multi-Agent System:** A sophisticated architecture with specialized agents for monitoring, investigation, and action, all coordinated by a central orchestrator.
-*   **Proactive Fraud Detection:** The system continuously monitors transactions to identify and mitigate potential fraud before it can cause harm.
-*   **Risk-Gated Enforcement:** The Orchestrator uses investigation results to compute a risk score and only escalates to the Actuator Agent when a configurable threshold is exceeded.
-*   **Secure Data Access:** The **GenAl Toolbox** provides a secure bridge to the application's databases, exposing only the necessary data through a well-defined API.
-*   **Seamless Integration:** The Vigil System interacts with the existing Bank of Anthos application through its APIs, demonstrating how agentic AI can enhance legacy systems without modifying their core code.
+- **Hierarchical Multi-Agent System**: Specialized agents with clear separation of concerns, coordinated by a central orchestrator.
+- **LLM-Powered Decision Making**: The Orchestrator and Investigation agents use Gemini to reason about fraud risk.
+- **Risk-Gated Enforcement**: Actions are only taken when investigation risk scores exceed a configurable threshold.
+- **A2A Protocol**: Inter-agent communication follows the Agent-to-Agent protocol for structured message passing.
+- **Non-Invasive Integration**: Vigil monitors and protects Bank of Anthos without modifying its core application code.
 
-## Architecture
+## Detection Flow
 
-The Vigil architecture is a decoupled and secure Hierarchical Multi-Agent System. A central **Orchestrator Agent** manages the workflow, delegating tasks to specialized agents. The system interfaces with the Bank of Anthos application's databases through the **GenAl Toolbox**, which acts as a secure data access layer.
+1. **Monitor**: Transaction Monitor detects a high-value transaction (default threshold: $1,000)
+2. **Alert**: Sends A2A message to Orchestrator with transaction details
+3. **Investigate**: Orchestrator delegates to Investigation Agent, which queries user profile and history
+4. **Assess**: Investigation Agent uses Gemini to produce a risk score (0-10) with justification
+5. **Decide**: Orchestrator evaluates risk score against threshold (default: 7)
+6. **Act**: If threshold exceeded, Orchestrator commands Actuator to lock the account
 
-### Architectural Diagram
+## Deployment
 
-<img width="3840" height="1848" alt="vigil_system _ Mermaid Chart-2025-09-22-203418" src="https://github.com/user-attachments/assets/c99292af-76db-4fe7-8318-88c514952b66" />
+### Prerequisites
 
-### Component Roles & Responsibilities
+- Google Cloud project with billing enabled
+- GKE cluster
+- `kubectl` configured for your cluster
+- Docker installed locally
+- Bank of Anthos deployed to the cluster
 
-| Component                | Technology/Protocol       | Role & Responsibility                                                                                                                                                           |
-| :----------------------- | :------------------------ | :------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| **Orchestrator Agent**   | FastAPI + A2A             | The system's central "brain." Receives alerts, runs rule-based orchestration, and delegates to the Investigation and Actuator agents when risk thresholds are exceeded.        |
-| **TransactionMonitor Agent** | ADK (Loop or CustomAgent) | The system's sensor. Continuously monitors the Ledger DB for new transactions, flags anomalies, and initiates an investigation via an A2A call to the Orchestrator.            |
-| **Investigation Agent**  | ADK (LlmAgent with Gemini) | The digital detective. Gathers comprehensive context on a flagged transaction using various database tools. Synthesizes findings into a "case file" for review.               |
-| **Actuator Agent**       | ADK (CustomAgent)         | The enforcement arm. Receives validated commands from the Orchestrator and executes actions (e.g., locking an account) by invoking tools on the GenAl Toolbox.                   |
-| **GenAl Toolbox Service**| GenAl Toolbox (Go binary) | The secure MCP server. Connects to both Bank of Anthos databases and exposes pre-defined SQL queries as "tools" for the agents to consume.                                       |
-
-## Getting Started
-
-Before you can deploy the Vigil AI Fraud Shield, you need to have the following prerequisites in place:
-
-*   **Google Cloud Project:** A Google Cloud project with billing enabled.
-*   **GKE Cluster:** A running GKE cluster in your project.
-*   **kubectl:** The `kubectl` command-line tool configured to connect to your GKE cluster.
-*   **gcloud CLI:** The `gcloud` command-line tool authenticated to your Google Cloud project.
-*   **Docker:** Docker installed and running on your local machine.
-
-### Bank of Anthos
-
-The Vigil system is designed to protect the **Bank of Anthos** application, a sample web-based banking application. You must deploy the Bank of Anthos to your GKE cluster before deploying Vigil.
-
-For instructions on how to deploy the Bank of Anthos, please refer to the official Google Cloud repository: [https://github.com/GoogleCloudPlatform/bank-of-anthos](https://github.com/GoogleCloudPlatform/bank-of-anthos)
-
-## Deployment Guide
-
-Follow these steps to deploy the Vigil AI Fraud Shield to your GKE cluster.
-
-### 1. Configure the Gemini API Key
-
-Create a Kubernetes secret for your Gemini API key.
-
-1.  Copy the example file:
-    ```bash
-    cp vigil-system/gemini-api-key-secret.yaml.example vigil-system/gemini-api-key-secret.yaml
-    ```
-2.  Edit `vigil-system/gemini-api-key-secret.yaml` and replace the placeholder with your actual Gemini API key.
-
-### 2. Create Artifact Registry Repository
-
-Create a repository in Google Artifact Registry to store the container images for the Vigil system.
+### Quick Start
 
 ```bash
-gcloud artifacts repositories create vigil-repo \
-    --repository-format=docker \
-    --location=us-central1 \
-    --description="Repository for Vigil AI Fraud Shield images"
-```
-*Note: You can replace `us-central1` with the region of your choice.*
+# 1. Configure Gemini API key
+cp vigil-system/gemini-api-key-secret.yaml.example vigil-system/gemini-api-key-secret.yaml
+# Edit the file with your actual API key
 
-### 3. Configure Docker Authentication
-
-Configure Docker to use your Google Cloud credentials to authenticate with Artifact Registry.
-
-```bash
-gcloud auth configure-docker us-central1-docker.pkg.dev
-```
-
-### 4. Build and Push Container Images
-
-Run these commands from the root of the repository to build and push the images for each service.
-
-```bash
-# Define variables
+# 2. Set up environment
 export PROJECT_ID=$(gcloud config get-value project)
 export REGION="us-central1"
 export REPO="vigil-repo"
 export IMAGE_PREFIX="${REGION}-docker.pkg.dev/${PROJECT_ID}/${REPO}"
 
-# Build and push images for each agent and the GenAl Toolbox
+# 3. Create Artifact Registry repository
+gcloud artifacts repositories create vigil-repo \
+    --repository-format=docker \
+    --location=$REGION
+
+# 4. Configure Docker authentication
+gcloud auth configure-docker ${REGION}-docker.pkg.dev
+
+# 5. Build and push images
 docker build -t "${IMAGE_PREFIX}/genal-toolbox:latest" -f vigil-system/genal_toolbox/Dockerfile .
-docker push "${IMAGE_PREFIX}/genal-toolbox:latest"
-
 docker build -t "${IMAGE_PREFIX}/transaction-monitor-agent:latest" -f vigil-system/transaction_monitor_agent/Dockerfile .
-docker push "${IMAGE_PREFIX}/transaction-monitor-agent:latest"
-
 docker build -t "${IMAGE_PREFIX}/orchestrator-agent:latest" -f vigil-system/orchestrator_agent/Dockerfile .
-docker push "${IMAGE_PREFIX}/orchestrator-agent:latest"
-
 docker build -t "${IMAGE_PREFIX}/investigation-agent:latest" -f vigil-system/investigation_agent/Dockerfile .
-docker push "${IMAGE_PREFIX}/investigation-agent:latest"
-
 docker build -t "${IMAGE_PREFIX}/actuator-agent:latest" -f vigil-system/actuator_agent/Dockerfile .
+
+docker push "${IMAGE_PREFIX}/genal-toolbox:latest"
+docker push "${IMAGE_PREFIX}/transaction-monitor-agent:latest"
+docker push "${IMAGE_PREFIX}/orchestrator-agent:latest"
+docker push "${IMAGE_PREFIX}/investigation-agent:latest"
 docker push "${IMAGE_PREFIX}/actuator-agent:latest"
-```
 
-### 5. Deploy the Application
-
-Apply the Kubernetes manifests to your GKE cluster in the following order:
-
-```bash
-# 1. Apply the Secret and ConfigMap
+# 6. Deploy to GKE
 kubectl apply -f vigil-system/gemini-api-key-secret.yaml
 kubectl apply -f vigil-system/genal_toolbox/toolbox-configmap.yaml
+kubectl apply -f vigil-system/genal_toolbox/
+kubectl apply -f vigil-system/transaction_monitor_agent/
+kubectl apply -f vigil-system/orchestrator_agent/
+kubectl apply -f vigil-system/investigation_agent/
+kubectl apply -f vigil-system/actuator_agent/
 
-# 2. Apply the Deployments and Services for each component
-# GenAl Toolbox
-kubectl apply -f vigil-system/genal_toolbox/genal_toolbox_deployment.yaml
-kubectl apply -f vigil-system/genal_toolbox/genal_toolbox_service.yaml
-
-# TransactionMonitor Agent
-kubectl apply -f vigil-system/transaction_monitor_agent/transaction_monitor_agent_deployment.yaml
-
-# Orchestrator Agent
-kubectl apply -f vigil-system/orchestrator_agent/orchestrator_agent_deployment.yaml
-kubectl apply -f vigil-system/orchestrator_agent/orchestrator_agent_service.yaml
-
-# Investigation Agent
-kubectl apply -f vigil-system/investigation_agent/investigation_agent_deployment.yaml
-kubectl apply -f vigil-system/investigation_agent/investigation_agent_service.yaml
-
-# Actuator Agent
-kubectl apply -f vigil-system/actuator_agent/actuator_agent_deployment.yaml
-kubectl apply -f vigil-system/actuator_agent/actuator_agent_service.yaml
-```
-
-### 6. Verify the Deployment
-
-Check the status of the pods to ensure they are all running correctly.
-
-```bash
+# 7. Verify
 kubectl get pods
 ```
-You should see output similar to this:
-```
-NAME                                            READY   STATUS    RESTARTS   AGE
-actuator-agent-594bb8b5d5-z6j6c                 1/1     Running   0          10m
-genal-toolbox-589b9b8c5c-6j5x6                  1/1     Running   0          10m
-investigation-agent-5c4f8f8b8d-n9x5g             1/1     Running   0          10m
-orchestrator-agent-5d4b8b8b8d-6x2g4              1/1     Running   0          10m
-transaction-monitor-agent-5f4g8g8b8d-5g5g2       1/1     Running   0          10m
-```
 
-## Usage and Observation
+### Configuration
 
-Once deployed, the Vigil System will automatically begin monitoring the Bank of Anthos transactions. Here's how you can observe the system in action:
+| Environment Variable | Component | Default | Description |
+|---------------------|-----------|---------|-------------|
+| `FRAUD_THRESHOLD` | Transaction Monitor | 1000.0 | Minimum transaction amount to flag |
+| `POLL_INTERVAL` | Transaction Monitor | 5 | Seconds between ledger polls |
+| `RISK_SCORE_THRESHOLD` | Orchestrator | 7 | Minimum risk score to trigger enforcement |
+| `GEMINI_API_KEY` | Orchestrator, Investigation | — | Required for LLM agents |
 
-### Checking Logs
-
-You can monitor the logs of each agent to see the real-time activity of the system.
+## Observing the System
 
 ```bash
-# Get the name of the pod for the agent you want to monitor
-kubectl get pods
+# Watch all Vigil pods
+kubectl get pods -w
 
-# Stream the logs for a specific pod
-kubectl logs -f <pod-name>
+# Stream logs from specific agents
+kubectl logs -f deployment/transaction-monitor-agent
+kubectl logs -f deployment/orchestrator-agent
+kubectl logs -f deployment/investigation-agent
+kubectl logs -f deployment/actuator-agent
 ```
-For example, to monitor the Orchestrator Agent, you would run:
-```bash
-kubectl logs -f orchestrator-agent-5d4b8b8b8d-6x2g4
-```
 
-### End-to-End Workflow
+## Future Improvements
 
-The end-to-end workflow for a typical fraud detection scenario is as follows:
+- [ ] **True MCP Integration**: Replace REST calls to GenAI Toolbox with proper MCP protocol
+- [ ] **Streaming Investigation**: Use streaming responses for real-time investigation updates
+- [ ] **Enhanced Fraud Rules**: Implement velocity checks, geographic anomaly detection, behavioral patterns
+- [ ] **Observability**: Add OpenTelemetry tracing across agent communications
+- [ ] **Human-in-the-Loop**: Add approval workflow for high-stakes enforcement actions
+- [ ] **Feedback Loop**: Allow marking false positives to improve risk scoring over time
+- [ ] **Multi-Cluster Support**: Deploy agents across regions for resilience
 
-1.  **Detection:** The **TransactionMonitorAgent** detects a high-value transaction and flags it.
-2.  **Initiation:** The **TransactionMonitorAgent** sends an alert to the **OrchestratorAgent**.
-3.  **Investigation:** The **OrchestratorAgent** delegates the investigation to the **InvestigationAgent**, which gathers details about the transaction and the user.
-4.  **Assessment:** The **OrchestratorAgent** interprets the investigation results and compares the reported risk score to the configured threshold.
-5.  **Action:** If the risk score meets or exceeds the threshold, the **OrchestratorAgent** commands the **ActuatorAgent** to take action, such as locking the user's account.
+## Technology Stack
 
-### Triggering a Test Scenario
+- **Runtime**: Python 3.11, Go
+- **AI/ML**: Google ADK, Gemini 2.5 Flash
+- **Communication**: A2A Protocol (a2a-sdk), REST APIs
+- **Infrastructure**: Google Kubernetes Engine (GKE), Artifact Registry
+- **Databases**: PostgreSQL (via Bank of Anthos)
+- **Frameworks**: FastAPI, uvicorn
 
-To test the system, you can manually insert a high-value transaction into the Bank of Anthos database. This will trigger the fraud detection workflow.
+## License
 
-1.  Connect to the `ledger-db` database in the Bank of Anthos application.
-2.  Insert a new transaction with a high value (e.g., > $1000).
-
-*Note: The default risk threshold is `7`. You can override it by setting the `RISK_SCORE_THRESHOLD` environment variable on the Orchestrator deployment.*
-
-## Developer's Guide
-
-For technical details on the project's architecture, technology stack, and developer best practices, please see the [Developer's Guide](DEVELOPERS.md).
-
-## Troubleshooting
-
-This section provides solutions to common issues that you may encounter when working with the Vigil System.
-
-### `CrashLoopBackOff` in Orchestrator Agent
-
-*   **Symptom:** The orchestrator agent pod is in a `CrashLoopBackOff` state with the error `ModuleNotFoundError: No module named 'google.adk.rpc'`.
-*   **Cause:** This is due to incorrect A2A protocol imports and outdated ADK API usage.
-*   **Solution:**
-    1.  Ensure that the `a2a-sdk` package is included in `requirements.txt`.
-    2.  Update the code to import from `a2a.client` instead of `google.adk.rpc`.
-    3.  Update the code to use the modern ADK and A2A APIs as described in the "Developer Notes" section.
-
-### Database Connection Errors
-
-*   **Symptom:** The `genai-toolbox` service fails to connect to the Bank of Anthos databases with errors like `password authentication failed`.
-*   **Cause:** Incorrect database credentials or database names in the `tools.yaml` configuration file.
-*   **Solution:** Verify that the `user`, `password`, and `database` fields in `tools.yaml` match the actual credentials for the Bank of Anthos databases.
-
-### Database Schema Mismatches
-
-*   **Symptom:** SQL errors like `column "from_account_id" does not exist`.
-*   **Cause:** The SQL queries in `tools.yaml` do not match the actual schema of the Bank of Anthos database.
-*   **Solution:** Update the SQL queries in `tools.yaml` to use the correct column names. You can use aliases (e.g., `SELECT from_acct as from_account_id`) to map the database schema to the expected API schema.
-
-### JSON Parsing Errors
-
-*   **Symptom:** Errors like `'str' object has no attribute 'get'` when processing responses from the `genai-toolbox`.
-*   **Cause:** The `genai-toolbox` may return JSON data as a string within a `result` field (e.g., `{"result": "[{...}]"}`).
-*   **Solution:** Before processing the response, check if the data is a string. If it is, parse it using `json.loads()`.
+MIT License — see [LICENSE](LICENSE) for details.
 
 ## Acknowledgements
 
-A special thanks to the Google team and developers responsible for the GKE 10th Birthday Hackathon, and for creating the powerful SDKs and technologies that made this project possible.
-
-This project was developed with the assistance of several agentic AI coding assistants, including Google Labs' Jules, OpenAI's Codex, and Warp Terminal's AI.
+Developed for the **GKE 10th Birthday Hackathon**. Thanks to the Google Cloud team for the excellent SDKs and infrastructure that made this project possible.
