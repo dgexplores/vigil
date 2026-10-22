@@ -13,6 +13,9 @@
 # limitations under the License.
 
 import os
+# ADK currently caps OpenTelemetry below its tracestate parser security fix.
+# Disable untrusted remote propagation; local spans can still be recorded.
+os.environ["OTEL_PROPAGATORS"] = "none"
 import logging
 import json
 import uuid
@@ -144,7 +147,7 @@ class ActuatorService:
             except ValueError:
                 error_body = {"message": response.text}
             return {"error": "http_error", "details": error_body}
-        except requests.RequestException as error:
+        except (requests.RequestException, ValueError) as error:
             logger.error("Error calling genai-toolbox API: %s", str(error))
             return {"error": "request_failed", "details": str(error)}
 
@@ -187,6 +190,11 @@ class ActuatorService:
                     "details": response,
                 }
 
+            rows = response.get("result", response.get("data", [])) if isinstance(response, dict) else []
+            if isinstance(rows, dict):
+                rows = [rows]
+            if not any(isinstance(row, dict) and row.get("account_id") == account_id for row in rows):
+                return {"status": "error", "message": "Lock was not confirmed for this account"}
             logger.info("Successfully locked account for account_id: %s", account_id)
             return {
                 "status": "success",
@@ -223,7 +231,7 @@ async def handle_a2a_message(request: SendMessageRequest) -> SendMessageResponse
         if "execute_action:" in message_text or "action" in message_text:
             try:
                 if "execute_action:" in message_text:
-                    command_json = message_text.replace("execute_action: ", "", 1)
+                    command_json = message_text.split("execute_action:", 1)[1].strip()
                 else:
                     command_json = message_text
 
@@ -297,6 +305,8 @@ async def execute_endpoint(command_data: Dict[str, Any]) -> Dict[str, Any]:
 @app.get("/health")
 async def health_check():
     """Health check endpoint."""
+    if actuator_service is None:
+        raise HTTPException(status_code=503, detail="Service not initialized")
     return {"status": "healthy", "service": "actuator_agent"}
 
 
@@ -313,6 +323,7 @@ def main():
 
     except Exception as error:
         logger.fatal("Failed to start ActuatorAgent: %s", str(error), exc_info=True)
+        raise
 
 
 if __name__ == "__main__":

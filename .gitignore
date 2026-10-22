@@ -71,3 +71,6 @@ htmlcov/
 
 # Application Secrets
 vigil-system/gemini-api-key-secret.yaml
+# Local monitor delivery state
+*.sqlite3
+*.sqlite3-journal

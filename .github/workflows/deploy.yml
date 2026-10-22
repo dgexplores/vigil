@@ -1,0 +1,81 @@
+name: Deploy verified Vigil agents to GKE
+on:
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: production-deploy
+  cancel-in-progress: false
+jobs:
+  verify:
+    uses: ./.github/workflows/ci.yml
+  deploy:
+    needs: verify
+    runs-on: ubuntu-latest
+    environment: production
+    timeout-minutes: 45
+    permissions:
+      contents: read
+      id-token: write
+    env:
+      REGISTRY: ${{ vars.GCP_REGION }}-docker.pkg.dev/${{ vars.GCP_PROJECT_ID }}/${{ vars.GCP_ARTIFACT_REPOSITORY }}
+      NAMESPACE: ${{ vars.K8S_NAMESPACE }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Validate deployment configuration
+        env:
+          ENABLED: ${{ vars.CLOUD_DEPLOYMENT_ENABLED }}
+          PROVIDER: ${{ vars.GCP_WORKLOAD_IDENTITY_PROVIDER }}
+          ACCOUNT: ${{ vars.GCP_SERVICE_ACCOUNT }}
+          CLUSTER: ${{ vars.GKE_CLUSTER }}
+          LOCATION: ${{ vars.GKE_LOCATION }}
+          PROJECT: ${{ vars.GCP_PROJECT_ID }}
+          REGION: ${{ vars.GCP_REGION }}
+          REPOSITORY: ${{ vars.GCP_ARTIFACT_REPOSITORY }}
+        run: |
+          set -euo pipefail
+          test "$ENABLED" = true || { echo 'Cloud deployment disabled pending account and credit approval'; exit 1; }
+          for name in PROVIDER ACCOUNT CLUSTER LOCATION PROJECT REGION REPOSITORY NAMESPACE; do
+            test -n "${!name}" || { echo "Missing environment variable: $name"; exit 1; }
+          done
+      - uses: google-github-actions/auth@v2
+        with:
+          workload_identity_provider: ${{ vars.GCP_WORKLOAD_IDENTITY_PROVIDER }}
+          service_account: ${{ vars.GCP_SERVICE_ACCOUNT }}
+      - uses: google-github-actions/setup-gcloud@v2
+      - uses: google-github-actions/get-gke-credentials@v2
+        with:
+          cluster_name: ${{ vars.GKE_CLUSTER }}
+          location: ${{ vars.GKE_LOCATION }}
+          project_id: ${{ vars.GCP_PROJECT_ID }}
+      - name: Publish revision images and roll out existing deployments
+        run: |
+          set -euo pipefail
+          gcloud auth configure-docker "${REGISTRY%%/*}" --quiet
+          for agent in transaction_monitor orchestrator investigation actuator; do
+            name="${agent//_/-}-agent"
+            context=.
+            if [ "$agent" = investigation ]; then context=vigil-system/investigation_agent; fi
+            image="$REGISTRY/$name:$GITHUB_SHA"
+            docker build -f "vigil-system/${agent}_agent/Dockerfile" -t "$image" "$context"
+            docker push "$image"
+          done
+          docker build -f vigil-system/genal_toolbox/Dockerfile -t "$REGISTRY/genal-toolbox:$GITHUB_SHA" vigil-system/genal_toolbox
+          docker push "$REGISTRY/genal-toolbox:$GITHUB_SHA"
+          kubectl -n "$NAMESPACE" apply -f vigil-system/transaction_monitor_agent/monitor_state_pvc.yaml
+          kubectl -n "$NAMESPACE" apply -f vigil-system/genal_toolbox/toolbox-configmap.yaml
+          kubectl -n "$NAMESPACE" apply -f vigil-system/genal_toolbox/ledger-migration.yaml
+          kubectl -n "$NAMESPACE" wait --for=condition=complete job/vigil-ledger-migration-v1 --timeout=300s
+          kubectl set image --local -f vigil-system/genal_toolbox/genal_toolbox_deployment.yaml "genal-toolbox=$REGISTRY/genal-toolbox:$GITHUB_SHA" -o yaml > /tmp/toolbox-deployment.yaml
+          kubectl -n "$NAMESPACE" apply -f /tmp/toolbox-deployment.yaml
+          kubectl -n "$NAMESPACE" rollout status deployment/genal-toolbox-service --timeout=300s
+          for agent in transaction-monitor orchestrator investigation actuator; do
+            name="$agent-agent"
+            if [ "$agent" = transaction-monitor ]; then
+              kubectl set image --local -f vigil-system/transaction_monitor_agent/transaction_monitor_agent_deployment.yaml "$name=$REGISTRY/$name:$GITHUB_SHA" -o yaml > /tmp/monitor-deployment.yaml
+              kubectl -n "$NAMESPACE" apply -f /tmp/monitor-deployment.yaml
+            else
+              kubectl -n "$NAMESPACE" set image "deployment/$name" "$name=$REGISTRY/$name:$GITHUB_SHA"
+            fi
+            kubectl -n "$NAMESPACE" rollout status "deployment/$name" --timeout=300s
+          done

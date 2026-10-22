@@ -13,9 +13,14 @@
 # limitations under the License.
 
 import os
+# ADK currently caps OpenTelemetry below its tracestate parser security fix.
+# Disable untrusted remote propagation; local spans can still be recorded.
+os.environ["OTEL_PROPAGATORS"] = "none"
 import logging
 import json
 import uuid
+import math
+from contextvars import ContextVar
 from typing import Any, Optional
 
 from fastapi import FastAPI, HTTPException
@@ -61,7 +66,7 @@ You are Vigil Orchestrator, the command agent coordinating fraud investigations 
 Follow this doctrine for every transaction alert:
 1. Always invoke the InvestigationAgent tool first, passing the raw transaction JSON so it can produce a case file with a risk score.
 2. Review the investigation response. The escalation threshold for risky activity is {threshold}.
-3. If the risk score is greater than or equal to {threshold}, call the ActuatorAgent tool exactly once with JSON of the form {{"action": "lock_account", "account_id": "<ACCOUNT_ID>", "ext_user_id": "<EXT_USER_ID>", "reason": "<SHORT_REASON>", "case_file": <CASE_FILE> }}. The GenAI toolbox expects the `account_id` field; include `ext_user_id` when available.
+3. If the risk score is greater than or equal to {threshold}, call the ActuatorAgent tool exactly once with JSON of the form {{"action": "lock_account", "account_id": "<ACCOUNT_ID>", "ext_user_id": "<EXT_USER_ID>", "reason": "<SHORT_REASON>", "case_file": <CASE_FILE> }}. The GenAI toolbox expects the `account_id` field.
 4. If the risk score is below the threshold, do not actuate; instead, summarize why no action was taken.
 5. Conclude with a concise narrative summary that states the risk score, whether actuation occurred, and the supporting justification.
 Do not send alternative keys such as "command". Avoid repeated actuator calls after a successful response.
@@ -76,7 +81,13 @@ _TOOL_LABELS = {
 }
 
 
-_latest_case_file: Any | None = None
+_request_state: ContextVar[dict | None] = ContextVar("orchestration_state", default=None)
+
+
+def _actuation_succeeded(result: Any) -> bool:
+    return (isinstance(result, dict) and not result.get("error")
+            and isinstance(result.get("data"), dict)
+            and result["data"].get("status") == "success")
 
 
 def _human_tool_name(raw_name: str) -> str:
@@ -211,14 +222,17 @@ def _parse_float(value: Any) -> Optional[float]:
     """Attempt to convert a value to float, returning None on failure."""
     if value is None:
         return None
+    if isinstance(value, bool):
+        return None
     if isinstance(value, (int, float)):
-        return float(value)
+        return float(value) if math.isfinite(value) else None
     if isinstance(value, str):
         candidate = value.strip().replace("%", "")
         if not candidate:
             return None
         try:
-            return float(candidate)
+            parsed = float(candidate)
+            return parsed if math.isfinite(parsed) else None
         except ValueError:
             return None
     return None
@@ -366,7 +380,10 @@ def _coerce_to_dict(raw_command: Any) -> tuple[Optional[dict[str, Any]], Optiona
 
     for candidate in sanitized_candidates:
         try:
-            return json.loads(candidate), None
+            parsed = json.loads(candidate)
+            if isinstance(parsed, dict):
+                return parsed, None
+            return None, "Actuator command must be a JSON object"
         except json.JSONDecodeError:
             continue
 
@@ -380,9 +397,22 @@ def _prepare_actuator_payload(raw_command: Any) -> tuple[Optional[dict[str, Any]
     if payload is None:
         return None, error
 
-    case_file = payload.get("case_file")
-    if case_file is None and _latest_case_file is not None:
-        case_file = _latest_case_file
+    state = _request_state.get()
+    if state is None or state.get("case_file") is None:
+        return None, "Investigation must complete in this request before actuation."
+    case_file = state["case_file"]
+    score = _extract_risk_score(case_file)
+    if score is None or not 0 <= score <= 10 or score < state["threshold"]:
+        return None, "Investigation risk score does not meet the actuation threshold."
+    if state.get("actuated") or state.get("actuator_in_flight"):
+        return None, "This request has already successfully actuated."
+    expected_account = state["transaction"].get("from_account_id")
+    if _extract_account_id(case_file) != expected_account:
+        return None, "Investigation account does not match the original transaction."
+    supplied_account = payload.get("account_id") or payload.get("from_account_id")
+    if supplied_account and supplied_account != expected_account:
+        return None, "Actuator account does not match the original transaction."
+    payload["account_id"] = expected_account
     account_id = payload.get("account_id") or payload.get("from_account_id")
     ext_user_id = payload.get("ext_user_id") or payload.get("user_id")
 
@@ -458,6 +488,10 @@ async def _delegate_via_a2a(
 async def delegate_to_investigation_agent(transaction_details: Any) -> dict[str, Any]:
     """Delegates the investigation of a suspicious transaction to the InvestigationAgent."""
     logger.info("Delegating to InvestigationAgent with transaction payload.")
+    state = _request_state.get()
+    if state is not None:
+        state.pop("case_file", None)
+        transaction_details = state["transaction"]
     result = await _delegate_via_a2a(
         agent_label="InvestigationAgent",
         cache_key="investigation_agent",
@@ -466,8 +500,9 @@ async def delegate_to_investigation_agent(transaction_details: Any) -> dict[str,
         payload=transaction_details,
     )
     if isinstance(result, dict) and result.get("data") is not None:
-        global _latest_case_file
-        _latest_case_file = result["data"]
+        state = _request_state.get()
+        if state is not None:
+            state["case_file"] = result["data"]
     return result
 
 
@@ -485,13 +520,21 @@ async def delegate_to_actuator_agent(action_command: Any) -> dict[str, Any]:
             "agent": "ActuatorAgent",
             "error": error,
         }
-    return await _delegate_via_a2a(
-        agent_label="ActuatorAgent",
-        cache_key="actuator_agent",
-        service_url=ACTUATOR_AGENT_URL,
-        payload_prefix="execute_action:",
-        payload=normalized_payload,
-    )
+    state = _request_state.get()
+    state["actuator_in_flight"] = True
+    try:
+        result = await _delegate_via_a2a(
+            agent_label="ActuatorAgent",
+            cache_key="actuator_agent",
+            service_url=ACTUATOR_AGENT_URL,
+            payload_prefix="execute_action:",
+            payload=normalized_payload,
+        )
+        if _actuation_succeeded(result):
+            state["actuated"] = True
+        return result
+    finally:
+        state["actuator_in_flight"] = False
 
 
 investigation_tool = FunctionTool(delegate_to_investigation_agent)
@@ -513,7 +556,7 @@ class OrchestratorService:
             )
 
         threshold = _parse_float(RISK_SCORE_THRESHOLD)
-        if threshold is None:
+        if threshold is None or not 0 <= threshold <= 10:
             logger.warning(
                 "Invalid RISK_SCORE_THRESHOLD value '%s'; defaulting to 7.0",
                 RISK_SCORE_THRESHOLD,
@@ -550,6 +593,16 @@ class OrchestratorService:
         )
 
     async def process_transaction_alert(self, transaction_data: dict) -> dict:
+        """Isolate tool state for concurrent requests and discard it afterwards."""
+        if not isinstance(transaction_data, dict) or not transaction_data.get("from_account_id"):
+            return {"status": "error", "error": "Missing from_account_id"}
+        token = _request_state.set({"transaction": transaction_data, "threshold": self.risk_threshold})
+        try:
+            return await self._process_transaction_alert(transaction_data)
+        finally:
+            _request_state.reset(token)
+
+    async def _process_transaction_alert(self, transaction_data: dict) -> dict:
         """Run the Gemini-backed orchestration flow for a transaction alert."""
         logger.info("Received transaction alert: %s", transaction_data)
 
@@ -650,7 +703,7 @@ class OrchestratorService:
 
         actuator_result_success = False
         if isinstance(actuator_result, dict):
-            actuator_result_success = not actuator_result.get("error")
+            actuator_result_success = _actuation_succeeded(actuator_result)
         should_actuate = actuator_result_success
 
         fallback_invoked = False
@@ -704,8 +757,7 @@ class OrchestratorService:
                 fallback_invoked = True
                 actuator_result = fallback_response
                 actuator_result_success = (
-                    isinstance(fallback_response, dict)
-                    and not fallback_response.get("error")
+                    _actuation_succeeded(fallback_response)
                 )
                 should_actuate = actuator_result_success
 
@@ -756,8 +808,10 @@ class OrchestratorService:
             should_actuate,
         )
 
+        valid_investigation = risk_score is not None and 0 <= risk_score <= 10
+        completed = valid_investigation and (risk_score < self.risk_threshold or should_actuate)
         response_payload: dict[str, Any] = {
-            "status": "completed",
+            "status": "completed" if completed else "error",
             "summary": summary,
             "session_id": session_id,
             "user_id": user_id,
@@ -806,8 +860,8 @@ async def handle_a2a_message(request: SendMessageRequest) -> SendMessageResponse
         logger.info(f"Received A2A message: {message_text}")
         
         # Parse the transaction data from the message
-        if "Process transaction alert:" in message_text:
-            transaction_json = message_text.replace("Process transaction alert: ", "")
+        if message_text.startswith("Process transaction alert:"):
+            transaction_json = message_text.split(":", 1)[1].strip()
             transaction_data = json.loads(transaction_json)
             
             # Process the transaction alert
@@ -842,6 +896,8 @@ async def handle_a2a_message(request: SendMessageRequest) -> SendMessageResponse
             )
             return SendMessageResponse(root=success_response)
             
+    except (json.JSONDecodeError, TypeError, AttributeError) as e:
+        raise HTTPException(status_code=400, detail="Invalid transaction alert JSON") from e
     except Exception as e:
         logger.error(f"Error processing A2A message: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail=f"Error processing message: {str(e)}")
@@ -855,6 +911,8 @@ async def handle_root_a2a_message(request: SendMessageRequest) -> SendMessageRes
 @app.get("/health")
 async def health_check():
     """Health check endpoint."""
+    if orchestrator_service is None:
+        raise HTTPException(status_code=503, detail="Service not initialized")
     return {"status": "healthy", "service": "orchestrator_agent"}
 
 
@@ -872,6 +930,7 @@ def main():
         
     except Exception as e:
         logger.fatal(f"Failed to start OrchestratorAgent: {e}", exc_info=True)
+        raise
 
 
 if __name__ == "__main__":

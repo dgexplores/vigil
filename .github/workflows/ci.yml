@@ -1,0 +1,105 @@
+name: Verify Vigil
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+  workflow_call:
+permissions:
+  contents: read
+jobs:
+  python:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: pip
+          cache-dependency-path: vigil-system/**/requirements.txt
+      - name: Install all agent dependencies
+        run: >-
+          python -m pip install
+          -r vigil-system/transaction_monitor_agent/requirements.txt
+          -r vigil-system/orchestrator_agent/requirements.txt
+          -r vigil-system/investigation_agent/requirements.txt
+          -r vigil-system/actuator_agent/requirements.txt
+      - name: Offline regression suite
+        run: python -m unittest discover -s tests -v
+      - name: Compile agent sources
+        run: python -m compileall -q vigil-system
+  containers:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - agent: transaction_monitor_agent
+            context: .
+          - agent: orchestrator_agent
+            context: .
+          - agent: investigation_agent
+            context: vigil-system/investigation_agent
+          - agent: actuator_agent
+            context: .
+          - agent: genal_toolbox
+            context: vigil-system/genal_toolbox
+    steps:
+      - uses: actions/checkout@v4
+      - uses: docker/setup-buildx-action@v3
+      - uses: docker/build-push-action@v6
+        with:
+          context: ${{ matrix.context }}
+          file: vigil-system/${{ matrix.agent }}/Dockerfile
+          push: false
+          load: true
+          tags: vigil/${{ matrix.agent }}:${{ github.sha }}
+      - name: Import packaged Python service
+        if: matrix.agent != 'genal_toolbox'
+        run: docker run --rm --entrypoint python vigil/${{ matrix.agent }}:${{ github.sha }} -c 'import agent'
+      - name: Check packaged toolbox executable
+        if: matrix.agent == 'genal_toolbox'
+        run: docker run --rm vigil/${{ matrix.agent }}:${{ github.sha }} --help
+  postgres-contract:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    services:
+      postgres:
+        image: postgres:17-alpine
+        env:
+          POSTGRES_DB: vigil_ci
+          POSTGRES_USER: vigil_ci
+          POSTGRES_PASSWORD: disposable-ci-only
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U vigil_ci -d vigil_ci"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 12
+    env:
+      TEST_POSTGRES_DSN: postgresql://vigil_ci:disposable-ci-only@localhost:5432/vigil_ci
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - run: python -m pip install 'psycopg[binary]==3.2.6'
+      - name: Verify actual bank schema and account-lock enforcement
+        run: python -m unittest discover -s tests -p test_postgres_contract.py -v
+  dependency-audit:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - run: python -m pip install pip-audit
+      # ADK caps OpenTelemetry below the fix. Remote propagation is forcibly
+      # disabled before import and regression-tested; see DEPENDENCY_REVIEW.md.
+      - run: pip-audit -r vigil-system/orchestrator_agent/requirements.txt --no-deps --disable-pip --ignore-vuln CVE-2026-114603
+      - run: pip-audit -r vigil-system/transaction_monitor_agent/requirements.txt --no-deps --disable-pip

@@ -25,7 +25,7 @@ data:
         kind: postgres-sql
         source: ledger-db
         description: "Retrieves all transactions that have occurred since the given timestamp."
-        statement: "SELECT transaction_id, amount, timestamp, from_acct AS from_account_id, to_acct AS to_account_id FROM transactions WHERE timestamp > $1 ORDER BY timestamp ASC;"
+        statement: "SELECT transaction_id, amount, timestamp AT TIME ZONE 'UTC' AS timestamp, from_acct AS from_account_id, to_acct AS to_account_id FROM transactions WHERE timestamp >= ($1::timestamptz AT TIME ZONE 'UTC') ORDER BY timestamp ASC;"
         parameters:
           - name: last_timestamp
             type: string
@@ -45,7 +45,7 @@ data:
         kind: postgres-sql
         source: ledger-db
         description: "Retrieves the 50 most recent transactions for a given user ID to understand their history."
-        statement: "SELECT transaction_id, amount, timestamp, from_acct, to_acct, from_route, to_route FROM transactions WHERE from_acct = $1 ORDER BY timestamp DESC LIMIT 50;"
+        statement: "SELECT transaction_id, amount, timestamp AT TIME ZONE 'UTC' AS timestamp, from_acct, to_acct, from_route, to_route FROM transactions WHERE from_acct = $1 ORDER BY timestamp DESC LIMIT 50;"
         parameters:
           - name: account_id
             type: string
@@ -53,13 +53,13 @@ data:
 
       lock_account:
         kind: postgres-sql
-        source: accounts-db
+        source: ledger-db
         description: "Locks a user's account to prevent further activity. This is a critical security action."
-        statement: "UPDATE users SET user_info = 'ACCOUNT_LOCKED_BY_VIGIL' WHERE ext_user_id = $1;"
+        statement: "INSERT INTO vigil_account_locks (account_id) VALUES ($1) ON CONFLICT (account_id) DO UPDATE SET locked_at = CURRENT_TIMESTAMP RETURNING account_id;"
         parameters:
-          - name: ext_user_id
+          - name: account_id
             type: string
-            description: "The external user ID associated with the account to be locked."
+            description: "The sending account ID to block at ledger insertion."
 
     toolsets:
       vigil_tools:

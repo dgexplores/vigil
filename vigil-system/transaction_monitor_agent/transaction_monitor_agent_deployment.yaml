@@ -5,6 +5,8 @@ metadata:
   labels:
     app: transaction-monitor-agent
 spec:
+  strategy:
+    type: Recreate
   replicas: 1
   selector:
     matchLabels:
@@ -18,7 +20,12 @@ spec:
       - name: transaction-monitor-agent
         # Replace with the actual image path after building and pushing
         image: southamerica-east1-docker.pkg.dev/vigil-demo-hackathon/vigil-repo/transaction-monitor-agent:v20250922-g03
+        volumeMounts:
+        - name: monitor-state
+          mountPath: /data
         env:
+        - name: MONITOR_STATE_PATH
+          value: /data/monitor.sqlite3
         - name: GENAL_TOOLBOX_SERVICE_URL
           value: "http://genal-toolbox-service"
         - name: ORCHESTRATOR_SERVICE_URL
@@ -27,3 +34,7 @@ spec:
           value: "5"
         - name: FRAUD_THRESHOLD
           value: "1000.0"
+      volumes:
+      - name: monitor-state
+        persistentVolumeClaim:
+          claimName: vigil-monitor-state

@@ -7,6 +7,7 @@ WORKDIR /app
 # Copy the transaction monitor agent files into the container at /app
 COPY vigil-system/transaction_monitor_agent/requirements.txt /app/
 COPY vigil-system/transaction_monitor_agent/agent.py /app/
+COPY vigil-system/transaction_monitor_agent/delivery_store.py /app/
 
 # Install any needed packages specified in requirements.txt
 RUN pip install --no-cache-dir -r requirements.txt

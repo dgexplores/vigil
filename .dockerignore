@@ -1,0 +1,9 @@
+.git
+bank-of-anthos
+.venv
+**/__pycache__
+**/*.pyc
+.env
+.env.*
+docs
+tests

@@ -13,10 +13,14 @@
 # limitations under the License.
 
 import os
+# ADK currently caps OpenTelemetry below its tracestate parser security fix.
+# Disable untrusted remote propagation; local spans can still be recorded.
+os.environ["OTEL_PROPAGATORS"] = "none"
 import logging
 import json
 import uuid
 import asyncio
+import math
 import requests
 from typing import Dict, Any
 
@@ -53,6 +57,8 @@ investigation_service = None
 class InvestigationService:
     def __init__(self):
         logger.info("Initializing InvestigationService...")
+        if not GEMINI_API_KEY:
+            raise ValueError("GEMINI_API_KEY is required for investigation")
         self.genal_toolbox_url = GENAL_TOOLBOX_URL
         self.llm_agent = LlmAgent(
             name="investigation_agent",
@@ -85,7 +91,7 @@ class InvestigationService:
                     elif "result" in result:
                         data = result["result"]
                     else:
-                        data = result if isinstance(result, list) else []
+                        raise ValueError("Toolbox response lacks data, rows, or result")
                     
                     # If data is a string, parse it as JSON
                     if isinstance(data, str):
@@ -93,25 +99,19 @@ class InvestigationService:
                             data = json.loads(data)
                         except json.JSONDecodeError as e:
                             logger.error(f"Failed to parse JSON response from genai-toolbox: {e}")
-                            return []
+                            raise ValueError("Invalid toolbox JSON") from e
                     
                     return data if isinstance(data, list) else [data] if data else []
                 elif isinstance(result, list):
                     return result
                 else:
                     logger.warning(f"Unexpected response format from genai-toolbox: {result}")
-                    return []
+                    raise ValueError("Unexpected toolbox response")
             else:
-                result = response.json() if response.headers.get('content-type') == 'application/json' else {}
-                if "error" in result:
-                    logger.error(f"genai-toolbox API error: {result['error']}")
-                    return []
-                else:
-                    logger.error(f"genai-toolbox HTTP error: {response.status_code} - {response.text}")
-                    return []
-        except Exception as e:
-            logger.error(f"Error calling genai-toolbox API: {e}")
-            return []
+                raise RuntimeError(f"Toolbox request failed with HTTP {response.status_code}")
+        except Exception:
+            logger.exception("Error calling GenAI Toolbox")
+            raise
 
     async def investigate_transaction(self, transaction_data: Dict[str, Any]) -> Dict[str, Any]:
         """
@@ -197,6 +197,13 @@ class InvestigationService:
                 .strip()
             )
             analysis = json.loads(cleaned_response)
+            if not isinstance(analysis, dict):
+                raise ValueError("Assessment must be a JSON object")
+            score = analysis.get("risk_score")
+            if isinstance(score, bool) or not isinstance(score, (float, int)) or not math.isfinite(score) or not 0 <= score <= 10:
+                raise ValueError("risk_score must be a finite number from 0 to 10")
+            if not isinstance(analysis.get("justification"), str) or not analysis["justification"].strip():
+                raise ValueError("Assessment must include a non-empty justification")
             logger.info(f"Received analysis from LLM: {analysis}")
         except Exception as e:
             logger.error(f"Error processing LLM response: {e}", exc_info=True)
@@ -240,7 +247,7 @@ async def handle_a2a_message(request: SendMessageRequest) -> SendMessageResponse
             # Try to extract JSON from the message
             try:
                 if "investigate_transaction:" in message_text:
-                    transaction_json = message_text.replace("investigate_transaction: ", "")
+                    transaction_json = message_text.split("investigate_transaction:", 1)[1].strip()
                 else:
                     transaction_json = message_text
                     
@@ -322,6 +329,8 @@ async def investigate_endpoint(transaction_data: Dict[str, Any]) -> Dict[str, An
 @app.get("/health")
 async def health_check():
     """Health check endpoint."""
+    if investigation_service is None:
+        raise HTTPException(status_code=503, detail="Service not initialized")
     return {"status": "healthy", "service": "investigation_agent"}
 
 
@@ -339,6 +348,7 @@ def main():
         
     except Exception as e:
         logger.fatal(f"Failed to start InvestigationAgent: {e}", exc_info=True)
+        raise
 
 
 if __name__ == "__main__":

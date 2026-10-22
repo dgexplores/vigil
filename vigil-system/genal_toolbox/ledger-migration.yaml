@@ -1,0 +1,65 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: vigil-ledger-migration
+data:
+  migration.sql: |
+    -- Additive ledger enforcement for Bank of Anthos. Run once before starting agents.
+    BEGIN;
+    CREATE TABLE IF NOT EXISTS vigil_account_locks (
+        account_id CHAR(10) PRIMARY KEY,
+        locked_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
+    );
+    CREATE OR REPLACE FUNCTION vigil_reject_locked_sender() RETURNS trigger AS $$
+    BEGIN
+        IF NEW.from_route = '883745000' AND EXISTS (
+            SELECT 1 FROM vigil_account_locks WHERE account_id = NEW.from_acct
+        ) THEN
+            RAISE EXCEPTION 'Sending account is locked by Vigil' USING ERRCODE = '23514';
+        END IF;
+        RETURN NEW;
+    END;
+    $$ LANGUAGE plpgsql;
+    DROP TRIGGER IF EXISTS vigil_account_lock_guard ON transactions;
+    CREATE TRIGGER vigil_account_lock_guard BEFORE INSERT ON transactions
+        FOR EACH ROW EXECUTE FUNCTION vigil_reject_locked_sender();
+    COMMIT;
+---
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: vigil-ledger-migration-v1
+spec:
+  backoffLimit: 3
+  template:
+    spec:
+      restartPolicy: Never
+      containers:
+      - name: migrate
+        image: postgres:17-alpine
+        command: ["psql", "-v", "ON_ERROR_STOP=1", "-f", "/migration/migration.sql"]
+        env:
+        - name: PGHOST
+          value: ledger-db
+        - name: PGDATABASE
+          valueFrom:
+            configMapKeyRef:
+              name: ledger-db-config
+              key: POSTGRES_DB
+        - name: PGUSER
+          valueFrom:
+            configMapKeyRef:
+              name: ledger-db-config
+              key: POSTGRES_USER
+        - name: PGPASSWORD
+          valueFrom:
+            configMapKeyRef:
+              name: ledger-db-config
+              key: POSTGRES_PASSWORD
+        volumeMounts:
+        - name: migration
+          mountPath: /migration
+      volumes:
+      - name: migration
+        configMap:
+          name: vigil-ledger-migration

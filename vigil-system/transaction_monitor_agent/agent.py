@@ -13,9 +13,7 @@
 # limitations under the License.
 
 import os
-import time
 import asyncio
-from datetime import datetime, timezone
 import logging
 import json
 import requests
@@ -33,6 +31,8 @@ from a2a.types import (
 )
 import httpx
 import uuid
+
+from delivery_store import DeliveryStore
 
 # Configure logging
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
@@ -54,7 +54,11 @@ class TransactionMonitorAgent:
         logger.info("Initializing TransactionMonitorAgent...")
         self.genal_toolbox_url = GENAL_TOOLBOX_URL
         self.orchestrator_client = None  # Lazy initialization
-        self.last_processed_timestamp = datetime.now(timezone.utc).isoformat()
+        self.delivery_store = DeliveryStore(
+            os.environ.get("MONITOR_STATE_PATH", "data/monitor.sqlite3"),
+            os.environ.get("MONITOR_START_TIMESTAMP", "1970-01-01T00:00:00+00:00"),
+        )
+        self.last_processed_timestamp = self.delivery_store.checkpoint
         logger.info("TransactionMonitorAgent initialized.")
 
     async def run(self) -> None:
@@ -122,38 +126,29 @@ class TransactionMonitorAgent:
             return []
 
     async def process_new_transactions(self) -> None:
-        """Fetches and processes new transactions."""
-        logger.info(f"Fetching new transactions since {self.last_processed_timestamp}...")
+        """Persist fetched alerts before dispatch, and retry unacknowledged alerts."""
         try:
-            # Use genai-toolbox REST API to get new transactions
-            transactions = self.get_new_transactions_via_genai_toolbox(self.last_processed_timestamp)
-             
-            if not transactions:
-                logger.info("No new transactions found.")
-                # Simulation disabled to avoid synthetic alerts in production environments.
-                return
-             
-            logger.info(f"Found {len(transactions)} new transactions.")
-             
-            latest_timestamp = self.last_processed_timestamp
-            alert_tasks = []  # Collect alert tasks to run concurrently
-            
-            for tx in transactions:
-                if float(tx.get("amount", 0)) > FRAUD_THRESHOLD:
-                    logger.warning(f"High-value transaction detected: {tx['transaction_id']} for amount {tx['amount']}. Alerting orchestrator.")
-                    alert_tasks.append(self.alert_orchestrator(tx))
-             
-                if tx["timestamp"] > latest_timestamp:
-                    latest_timestamp = tx["timestamp"]
-             
-            # Execute all alerts concurrently
-            if alert_tasks:
-                await asyncio.gather(*alert_tasks, return_exceptions=True)
-             
-            self.last_processed_timestamp = latest_timestamp
+            transactions = await asyncio.to_thread(
+                self.get_new_transactions_via_genai_toolbox,
+                self.delivery_store.checkpoint,
+            )
+            self.delivery_store.ingest(transactions, FRAUD_THRESHOLD)
+            self.last_processed_timestamp = self.delivery_store.checkpoint
+        except Exception:
+            logger.exception("Polling failed; checkpoint not advanced")
 
-        except Exception as e:
-            logger.error(f"Error processing new transactions: {e}", exc_info=True)
+        # A polling failure must not prevent delivery of already persisted alerts.
+        for tx in self.delivery_store.pending():
+            try:
+                success = await self.alert_orchestrator(tx)
+                self.delivery_store.record_attempt(
+                    tx["transaction_id"], success,
+                    None if success else "No successful A2A acknowledgement",
+                )
+            except Exception as exc:
+                self.delivery_store.record_attempt(tx["transaction_id"], False, str(exc))
+                logger.exception("Alert dispatch failed")
+        logger.info("Delivery summary: %s", self.delivery_store.summary())
 
     @staticmethod
     def _extract_message_text(message: Message) -> str:
@@ -201,7 +196,7 @@ class TransactionMonitorAgent:
             logger.error(f"Failed to create A2A client: {e}")
             return None
 
-    async def alert_orchestrator(self, transaction: dict) -> None:
+    async def alert_orchestrator(self, transaction: dict) -> bool:
         """Sends a transaction alert to the orchestrator agent via A2A protocol."""
         try:
             # Lazy initialization of client
@@ -210,7 +205,7 @@ class TransactionMonitorAgent:
             
             if self.orchestrator_client is None:
                 logger.warning(f"No A2A client available, skipping alert for transaction: {transaction['transaction_id']}")
-                return
+                return False
             
             logger.info(f"Sending A2A alert for transaction: {transaction['transaction_id']}")
             logger.info(f"Transaction details: amount={transaction.get('amount')}, to_account={transaction.get('to_account_id')}")
@@ -220,7 +215,7 @@ class TransactionMonitorAgent:
                 text=f"Process transaction alert: {json.dumps(transaction)}"
             )
             message_content = Message(
-                message_id=str(uuid.uuid4()),
+                message_id=str(uuid.uuid5(uuid.NAMESPACE_URL, "vigil:" + str(transaction["transaction_id"]))),
                 role=Role.user,
                 parts=[text_part]
             )
@@ -239,7 +234,7 @@ class TransactionMonitorAgent:
                     transaction["transaction_id"],
                     type(response),
                 )
-                return
+                return False
 
             root_payload = response.root
             if isinstance(root_payload, JSONRPCErrorResponse):
@@ -248,7 +243,7 @@ class TransactionMonitorAgent:
                     transaction["transaction_id"],
                     root_payload.error,
                 )
-                return
+                return False
 
             if isinstance(root_payload, SendMessageSuccessResponse):
                 payload = root_payload.result
@@ -260,8 +255,24 @@ class TransactionMonitorAgent:
                     "Orchestrator response missing result for transaction %s",
                     transaction["transaction_id"],
                 )
-                return
+                return False
 
+            # A returned Task is not proof that processing completed.
+            if isinstance(payload, Task) and payload.status.state.value != "completed":
+                return False
+            if isinstance(payload, Message):
+                text = self._extract_message_text(payload)
+                prefix = "Transaction alert processed:"
+                if text.startswith(prefix):
+                    text = text[len(prefix):].strip()
+                # JSON-RPC transport success can carry an application error.
+                try:
+                    result = json.loads(text)
+                except (ValueError, TypeError):
+                    logger.error("Expected structured orchestration acknowledgement")
+                    return False
+                if not isinstance(result, dict) or result.get("status") != "completed":
+                    return False
             summary = self._format_success_payload(payload)
             logger.info(
                 "Successfully sent alert for transaction %s. Orchestrator response: %s",
@@ -269,8 +280,12 @@ class TransactionMonitorAgent:
                 summary,
             )
 
+            return True
+
         except Exception as e:
             logger.error(f"Failed to alert orchestrator for transaction {transaction['transaction_id']}: {e}", exc_info=True)
+
+            return False
 
 
 async def main() -> None:

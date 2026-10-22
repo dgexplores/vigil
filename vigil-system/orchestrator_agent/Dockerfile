@@ -12,7 +12,7 @@ COPY vigil-system/orchestrator_agent/agent.py /app/
 RUN pip install --no-cache-dir -r requirements.txt
 
 # Expose the port for A2A server
-EXPOSE 8080
+EXPOSE 8000
 
 # Run agent.py when the container launches
 CMD ["python", "agent.py"]
