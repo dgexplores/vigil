@@ -30,14 +30,13 @@ the actual Bank of Anthos ledger schema, repeatable migration, timestamp
 conversion, rejected locked-sender insert, and unaffected other senders.
 Do not aim the test at a real banking database.
 
-Local results recorded on 22 October 2026: 24 tests passed with PostgreSQL
+Local results recorded on 22 October 2026: 25 tests passed with PostgreSQL
 17 enabled. Four agent images and pinned Go Toolbox built successfully.
 Four Go Toolbox HTTP tools and a running actuator-to-toolbox-to-PostgreSQL
 lock operation also passed using synthetic data. Built model service
 constructors initialized without live model calls.
 
-The Docker builds were Linux ARM64 local builds. GitHub-hosted AMD64 jobs,
-GKE rollout, and Gemini inference have not been observed in this work session.
+Local Docker builds were Linux ARM64. GitHub-hosted AMD64 container jobs and the full CI run also passed on publication commit 5931c90. GKE rollout and live Gemini inference remain unverified.
 
 ## Isolated dependency environments
 
