@@ -5,11 +5,7 @@ Run the Python commands from this repository root using Python 3.11.
 
 ```bash
 python3.11 -m venv .venv
-.venv/bin/python -m pip install \
-  -r vigil-system/transaction_monitor_agent/requirements.txt \
-  -r vigil-system/orchestrator_agent/requirements.txt \
-  -r vigil-system/investigation_agent/requirements.txt \
-  -r vigil-system/actuator_agent/requirements.txt
+.venv/bin/python -m pip install -r vigil-system/orchestrator_agent/requirements.txt
 .venv/bin/python -m unittest discover -s tests -v
 ```
 
@@ -42,3 +38,15 @@ constructors initialized without live model calls.
 
 The Docker builds were Linux ARM64 local builds. GitHub-hosted AMD64 jobs,
 GKE rollout, and Gemini inference have not been observed in this work session.
+
+## Isolated dependency environments
+
+Do not combine the monitor and ADK locks in one pip install. The monitor and
+ADK services are separate container processes and resolve different supported
+versions of Google API Core, protobuf and telemetry. `make install` creates
+`.venv` for the ADK service suite and `.monitor-venv` for the monitor. `make test`
+runs the full service suite plus monitor contracts in that isolated monitor
+environment. CI also tests the monitor inside its actual built image. All three
+ADK services share the same pinned dependency set. The initial hosted CI caught
+an attempted combined installation; this separation fixes the installation
+boundary without downgrading the monitor's patched telemetry package.

@@ -17,13 +17,8 @@ jobs:
           python-version: '3.11'
           cache: pip
           cache-dependency-path: vigil-system/**/requirements.txt
-      - name: Install all agent dependencies
-        run: >-
-          python -m pip install
-          -r vigil-system/transaction_monitor_agent/requirements.txt
-          -r vigil-system/orchestrator_agent/requirements.txt
-          -r vigil-system/investigation_agent/requirements.txt
-          -r vigil-system/actuator_agent/requirements.txt
+      - name: Install the ADK service test environment
+        run: python -m pip install -r vigil-system/orchestrator_agent/requirements.txt
       - name: Offline regression suite
         run: python -m unittest discover -s tests -v
       - name: Compile agent sources
@@ -58,6 +53,12 @@ jobs:
       - name: Import packaged Python service
         if: matrix.agent != 'genal_toolbox'
         run: docker run --rm --entrypoint python vigil/${{ matrix.agent }}:${{ github.sha }} -c 'import agent'
+      - name: Test monitor in its own packaged dependency environment
+        if: matrix.agent == 'transaction_monitor_agent'
+        run: >-
+          docker run --rm --entrypoint python -v "$PWD:/source:ro"
+          vigil/${{ matrix.agent }}:${{ github.sha }}
+          -m unittest discover -s /source/tests -p test_monitor_delivery.py -v
       - name: Check packaged toolbox executable
         if: matrix.agent == 'genal_toolbox'
         run: docker run --rm vigil/${{ matrix.agent }}:${{ github.sha }} --help

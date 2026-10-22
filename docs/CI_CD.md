@@ -1,7 +1,7 @@
 # Verification and deployment
 
 `.github/workflows/ci.yml` runs on pushes, pull requests, and manual requests.
-Python 3.11 installs all four agent requirements, executes the offline regression
+Python 3.11 installs the shared ADK service requirements, executes the offline regression
 suite, and compiles agent sources. A separate matrix builds all four Python
 containers and the pinned upstream toolbox image with their actual build contexts. A failed test or container build
 fails CI. No API key or running cloud service is required for the offline suite.
@@ -9,7 +9,7 @@ fails CI. No API key or running cloud service is required for the offline suite.
 Run locally from the repository root:
 
 ```sh
-python -m pip install -r vigil-system/transaction_monitor_agent/requirements.txt -r vigil-system/orchestrator_agent/requirements.txt -r vigil-system/investigation_agent/requirements.txt -r vigil-system/actuator_agent/requirements.txt
+python -m pip install -r vigil-system/orchestrator_agent/requirements.txt
 python -m unittest discover -s tests -v
 python -m compileall -q vigil-system
 ```
@@ -90,3 +90,15 @@ report. Local ARM64 builds do not establish that the GitHub-hosted AMD64 build
 has run. No image was pushed and no cloud deployment occurred during these
 checks. An initial base-image download failed with unexpected EOF and succeeded
 on retry; final image builds exited successfully.
+
+## Isolated dependency environments
+
+Do not combine the monitor and ADK locks in one pip install. The monitor and
+ADK services are separate container processes and resolve different supported
+versions of Google API Core, protobuf and telemetry. `make install` creates
+`.venv` for the ADK service suite and `.monitor-venv` for the monitor. `make test`
+runs the full service suite plus monitor contracts in that isolated monitor
+environment. CI also tests the monitor inside its actual built image. All three
+ADK services share the same pinned dependency set. The initial hosted CI caught
+an attempted combined installation; this separation fixes the installation
+boundary without downgrading the monitor's patched telemetry package.
