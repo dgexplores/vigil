@@ -91,7 +91,7 @@ def prepare(state, hostname, key_file=None):
             if java:
                 svc['depends_on']['migrate'] = {'condition': 'service_completed_successfully'}
         if name == 'frontend':
-            env.update(BANK_NAME='Vigil · Synthetic Banking Demo', SCHEME='https', PLATFORM='oracle', CLUSTER_NAME='Oracle Always Free ARM')
+            env.update(BANK_NAME='Vigil · Synthetic Banking Demo', SCHEME='https', ENV_PLATFORM='local', CLUSTER_NAME='Oracle Always Free ARM')
             svc['ports'] = ['127.0.0.1:8080:8080']
         services[name] = svc
     migration = list(yaml.safe_load_all((ROOT / 'vigil-system/genal_toolbox/ledger-migration.yaml').read_text()))[0]['data']['migration.sql']

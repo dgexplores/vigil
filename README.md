@@ -6,9 +6,21 @@
 
 Maintained by [dgexplores](https://github.com/dgexplores). This is an engineering extension of the [original Vigil project](https://github.com/ayanliger/gke-turns10-hackathon-vigil), with upstream authorship and notices retained.
 
-> **Deployment status:** local verification and standard GitHub CI have passed. An Oracle Always Free ARM deployment is in progress; live Gemini investigation and the public HTTPS release are still pending verification. No live application URL is claimed yet. See the [Oracle deployment guide](deploy/oracle/README.md) and [original GKE readiness](docs/DEPLOYMENT_READINESS.md).
+> **Live Oracle demo:** [Open Vigil](https://vigil-161-118-164-31.sslip.io/login). Use the fictional demo login **`testuser` / `bankofanthos`**. The banking UI is public; AI investigation, database tools, and actuator APIs run privately in the background. This uses an Oracle Always Free ARM host and a Gemini project with billing disabled. Free-tier capacity and inference availability can vary.
 
 [Read the source](https://github.com/dgexplores/vigil) · [See the successful CI run](https://github.com/dgexplores/vigil/actions/runs/39825812137) · [Review the engineering contributions](PORTFOLIO.md)
+
+## What you can explore
+
+Sign in to view the fictional account balance and transaction history. Small
+payments exercise ordinary bank routing. Transfers above $1,000 enter Vigil's
+background review; a high model risk score can lock the sender against future
+outgoing ledger transfers. A lock does not log the user out. Do not enter real
+banking or personal information.
+
+The UI is the upstream banking demo, rather than a chat interface. The
+[cloud verification record](docs/ORACLE_VERIFICATION.md) explains the synthetic
+investigation, enforced lock, and restart checks behind the demo.
 
 ## The story: one transfer, several unanswered questions
 
@@ -32,6 +44,32 @@ flowchart LR
 ```
 
 A lock does **not** reverse the original transfer or disable the customer's login. The initial amount rule is not a trained fraud classifier, and the model's fraud accuracy has not been measured here.
+
+## Live deployment: the same service boundaries on Oracle
+
+```mermaid
+flowchart LR
+    Browser[Recruiter browser] -->|HTTPS| Caddy
+    subgraph Oracle[Oracle Always Free ARM VM]
+        Caddy --> Bank[Bank of Anthos services]
+        Bank --> Accounts[(Accounts PostgreSQL)]
+        Bank --> Ledger[(Ledger PostgreSQL + lock trigger)]
+        Accounts --> Toolbox[GenAI Toolbox]
+        Ledger --> Toolbox
+        Monitor[Monitor + durable SQLite outbox] --> Toolbox
+        Monitor --> Orchestrator
+        Orchestrator --> Investigation
+        Investigation --> Toolbox
+        Orchestrator --> Actuator
+        Actuator --> Toolbox
+    end
+    Investigation --> Gemini[Gemini 3.5 Flash-Lite]
+    Orchestrator --> Gemini
+```
+
+Only Caddy exposes public application ports. Databases, Toolbox, and agent APIs
+stay on the container network. This is a single-host portfolio deployment;
+the [Oracle guide](deploy/oracle/README.md) explains its configuration and limits.
 
 ## Architecture: how the pieces talk
 
@@ -212,7 +250,7 @@ Follow [DEPLOYMENT_READINESS.md](docs/DEPLOYMENT_READINESS.md) and [CI_CD.md](do
 
 ## Remaining engineering boundaries
 
-- Live Gemini inference, full GKE operation, fraud precision/recall, throughput, and recovery under production load have not been measured.
+- A limited live Gemini workflow has been exercised with synthetic data. Fraud precision/recall, production throughput, full GKE operation, and recovery under production load have not been measured.
 - Delivery is at least once, with the late-arrival, retention, and scaling limits described above.
 - The ledger trigger targets local routing number `883745000`; it does not reverse settled transfers or disable login.
 - Google ADK constrains one upstream OpenTelemetry dependency below its patched release. Incoming trace propagation is forcibly disabled and regression-tested as mitigation; the dependency advisory itself is not fixed. See [DEPENDENCY_REVIEW.md](docs/DEPENDENCY_REVIEW.md).
