@@ -43,7 +43,8 @@ def prepare(state, hostname, key_file=None):
     if any(c.isspace() for c in gemini_key):
         raise ValueError('Gemini key must be a single token')
     env_file = state / 'agents.env'
-    env_file.write_text('GEMINI_API_KEY=' + gemini_key + '\nGEMINI_MODEL=gemini-3.8-flash\n')
+    if key_file or not env_file.exists():
+        env_file.write_text('GEMINI_API_KEY=' + gemini_key + '\nGEMINI_MODEL=gemini-3.8-flash\n')
     env_file.chmod(0o600)
     manifests = {}
     for path in (BANK / 'kubernetes-manifests').glob('*.yaml'):
@@ -70,6 +71,9 @@ def prepare(state, hostname, key_file=None):
         java = name in ['ledgerwriter', 'balancereader', 'transactionhistory']
         build = {'context': str(context), 'dockerfile': str(ROOT / 'deploy/oracle/Java.Dockerfile') if java else str(context / 'Dockerfile')}
         svc = {'build': build, 'image': 'vigil-local/' + name + ':arm64', 'restart': 'unless-stopped', 'environment': env, 'mem_limit': '512m' if java else {'frontend': '128m', 'userservice': '192m', 'contacts': '128m'}.get(name, '256m'), 'logging': {'driver': 'json-file', 'options': {'max-size': '5m', 'max-file': '2'}}}
+        if java:
+            # Upstream metric labels parse the prefix before the first hyphen.
+            svc['hostname'] = name + '-oracle'
         if name.endswith('-db'):
             svc['volumes'] = [name + ':/var/lib/postgresql/data']
             svc['healthcheck'] = {'test': ['CMD-SHELL', 'pg_isready -U $$POSTGRES_USER -d $$POSTGRES_DB'], 'interval': '10s', 'timeout': '5s', 'retries': 30}

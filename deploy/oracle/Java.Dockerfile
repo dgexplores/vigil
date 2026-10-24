@@ -2,7 +2,9 @@
 FROM maven:3.9-eclipse-temurin-17 AS build
 WORKDIR /src
 COPY . .
-RUN mvn -B -ntp -DskipTests package
+# Upstream's executable-jar mainClass has a case typo (Jib builds bypass it).
+RUN sed -i 's/TransActionHistoryApplication/TransactionHistoryApplication/g' pom.xml \
+    && mvn -B -ntp -DskipTests package
 FROM eclipse-temurin:17-jre
 RUN apt-get update && apt-get install -y --no-install-recommends curl && rm -rf /var/lib/apt/lists/*
 WORKDIR /app

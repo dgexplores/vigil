@@ -29,9 +29,12 @@ class OracleDeploymentTests(unittest.TestCase):
             self.assertEqual(services['transaction-monitor-agent']['environment']['FRAUD_THRESHOLD'], '100000')
             self.assertEqual(services['orchestrator-agent']['profiles'], ['agents'])
             self.assertIn('migrate', services['ledgerwriter']['depends_on'])
+            self.assertEqual(services['ledgerwriter']['hostname'], 'ledgerwriter-oracle')
             self.assertEqual(output.stat().st_mode & 0o777, 0o600)
+            (state / 'agents.env').write_text('GEMINI_API_KEY=disposable-test-value\nGEMINI_MODEL=test-model\n')
             module.prepare(state, 'demo.example.com')
             self.assertEqual((state / 'credentials.json').read_bytes(), before)
+            self.assertIn('disposable-test-value', (state / 'agents.env').read_text())
 
     def test_rejects_state_inside_checkout_and_invalid_hostname(self):
         with self.assertRaises(ValueError):

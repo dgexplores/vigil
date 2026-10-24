@@ -28,6 +28,11 @@ jobs:
         run: |
           docker compose -f "$RUNNER_TEMP/vigil/compose.json" up -d ledger-db accounts-db migrate userservice contacts ledgerwriter balancereader transactionhistory frontend genal-toolbox-service
           python deploy/oracle/verify.py --compose "$RUNNER_TEMP/vigil/compose.json"
+      - name: Report failed bank startup
+        if: failure()
+        run: |
+          docker compose -f "$RUNNER_TEMP/vigil/compose.json" ps --all
+          docker compose -f "$RUNNER_TEMP/vigil/compose.json" logs --tail 80 ledgerwriter balancereader transactionhistory frontend
       - name: Clean up disposable CI stack
         if: always()
         run: docker compose -f "$RUNNER_TEMP/vigil/compose.json" --profile agents down --volumes --remove-orphans
