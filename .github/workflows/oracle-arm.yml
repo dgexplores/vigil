@@ -1,6 +1,7 @@
 name: Verify Oracle ARM deployment
 on:
   workflow_dispatch:
+  workflow_call:
 permissions:
   contents: read
 jobs:

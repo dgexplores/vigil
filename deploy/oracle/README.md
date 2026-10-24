@@ -62,13 +62,13 @@ localhost; Caddy exposes ports 80 and 443 for HTTPS. Verify the chosen DNS name
 resolves to the VM and that those ports are allowed before requesting a certificate.
 
 The `agents` profile requires an actual Gemini key and model access. The Oracle
-configuration selects `gemini-3.8-flash`; `GEMINI_MODEL` is configurable. Free
+configuration selects `gemini-3.5-flash-lite`; `GEMINI_MODEL` is configurable. Free
 hosting does not establish eligibility for free Gemini inference. Configure and
 verify the Gemini project's free tier separately. Without a usable key, leave
 agents stopped and describe the bank stack as a partial deployment.
 
 The monitor uses 100000 cents ($1000) as its alert threshold, polls every 15
-seconds, and has one persistent outbox. No load generator is started. The bank
+seconds, and has one persistent outbox. The first deployment records its start timestamp to avoid replaying historical seed data; subsequent renders preserve it and the durable cursor. No load generator is started. The bank
 contains fictional demo accounts, including upstream `testuser` /
 `bankofanthos`; never enter real financial or identity information.
 
@@ -89,3 +89,20 @@ checks passed. No live deployment is implied by the presence of these files.
 
 Sources: [Oracle Always Free limits](https://docs.oracle.com/en-us/iaas/Content/FreeTier/freetier_topic-Always_Free_Resources.htm),
 [GitHub ARM runners](https://docs.github.com/en/actions/reference/runners/github-hosted-runners).
+
+## Oracle continuous delivery
+
+`oracle-deploy.yml` is a manual deployment from `main`. Both the standard CI
+suite and the native ARM runtime suite must pass first. Its `oracle-demo`
+environment needs variables `ORACLE_DEPLOYMENT_ENABLED=true`, `ORACLE_HOST`,
+and `ORACLE_DEMO_HOSTNAME`, plus environment secrets `ORACLE_SSH_KEY` and
+`ORACLE_KNOWN_HOSTS`. Use a dedicated key, restrict forwarding, and pin the host
+key from a previously verified connection. The Gemini key remains on the server.
+
+The workflow uploads the selected source revision, builds on the existing host,
+keeps secrets and persistent volumes outside revision directories, waits for
+bank and agent health, tests login and lock enforcement, and verifies HTTPS.
+It does not create cloud resources, upgrade accounts, or delete database volumes.
+A failed build restores the previous Compose configuration. A failed rollout
+requires inspection and an explicit redeployment of a known-good revision;
+there is no automatic database rollback. Back up data before schema changes.

@@ -3,6 +3,7 @@
 State and secrets belong outside the Git checkout. No cloud resources are created.
 """
 import argparse
+from datetime import datetime, timezone
 import json
 from pathlib import Path
 import secrets
@@ -44,8 +45,11 @@ def prepare(state, hostname, key_file=None):
         raise ValueError('Gemini key must be a single token')
     env_file = state / 'agents.env'
     if key_file or not env_file.exists():
-        env_file.write_text('GEMINI_API_KEY=' + gemini_key + '\nGEMINI_MODEL=gemini-3.8-flash\n')
+        env_file.write_text('GEMINI_API_KEY=' + gemini_key + '\nGEMINI_MODEL=gemini-3.5-flash-lite\n')
     env_file.chmod(0o600)
+    monitor_start = state / 'monitor-start.txt'
+    if not monitor_start.exists():
+        monitor_start.write_text(datetime.now(timezone.utc).isoformat())
     manifests = {}
     for path in (BANK / 'kubernetes-manifests').glob('*.yaml'):
         if path.name.startswith('._'):
@@ -109,7 +113,7 @@ def prepare(state, hostname, key_file=None):
         if short == 'orchestrator':
             env.update(INVESTIGATION_AGENT_SERVICE_URL='http://investigation-agent:8000', ACTUATOR_AGENT_SERVICE_URL='http://actuator-agent:8000', RISK_SCORE_THRESHOLD='7')
         if short == 'transaction_monitor':
-            env.update(ORCHESTRATOR_SERVICE_URL='http://orchestrator-agent:8000', POLL_INTERVAL='15', FRAUD_THRESHOLD='100000', MONITOR_STATE_PATH='/data/monitor.sqlite3')
+            env.update(ORCHESTRATOR_SERVICE_URL='http://orchestrator-agent:8000', POLL_INTERVAL='15', FRAUD_THRESHOLD='100000', MONITOR_STATE_PATH='/data/monitor.sqlite3', MONITOR_START_TIMESTAMP=monitor_start.read_text().strip())
         svc = {'profiles': ['agents'], 'build': {'context': str(folder if short == 'investigation' else ROOT), 'dockerfile': str(folder / 'Dockerfile')}, 'image': 'vigil-local/' + name + ':arm64', 'environment': env, 'env_file': [str(env_file)], 'restart': 'unless-stopped', 'depends_on': {'genal-toolbox-service': {'condition': 'service_started'}}, 'mem_limit': '768m' if short in ['investigation', 'orchestrator'] else '256m', 'logging': {'driver': 'json-file', 'options': {'max-size': '5m', 'max-file': '2'}}}
         if short == 'transaction_monitor':
             svc['volumes'] = ['monitor-state:/data']

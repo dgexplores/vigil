@@ -15,9 +15,11 @@ class NoRedirect(urllib.request.HTTPRedirectHandler):
         return None
 
 
-def verify(compose, timeout=300):
+def verify(compose, timeout=300, include_agents=False):
     command = ['docker', 'compose', '-f', str(compose)]
     services = ['ledger-db', 'accounts-db', 'userservice', 'contacts', 'ledgerwriter', 'balancereader', 'transactionhistory', 'frontend', 'genal-toolbox-service']
+    if include_agents:
+        services += ['orchestrator-agent', 'investigation-agent', 'actuator-agent', 'transaction-monitor-agent']
     deadline = time.monotonic() + timeout
     while True:
         waiting = []
@@ -75,5 +77,6 @@ if __name__ == '__main__':
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--compose', type=Path, required=True)
     parser.add_argument('--timeout', type=int, default=300)
+    parser.add_argument('--agents', action='store_true', help='Also require deployed agent service health; does not call Gemini')
     args = parser.parse_args()
-    verify(args.compose, args.timeout)
+    verify(args.compose, args.timeout, args.agents)

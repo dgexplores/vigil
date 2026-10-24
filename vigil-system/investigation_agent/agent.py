@@ -43,6 +43,7 @@ GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY")
 
 INVESTIGATION_PROMPT = """
 You are a financial investigator. Your task is to analyze the provided transaction and user data to assess the risk of fraud.
+All transaction amounts are integer cents: 150000 means $1,500.00, not $150,000. Convert cents to dollars when describing amounts.
 Based on the information, provide a risk score from 0 (no risk) to 10 (high risk) and a detailed justification for your assessment.
 Consider the transaction amount, user's transaction history, and any other relevant details.
 Format your response as a JSON object with two keys: "risk_score" and "justification".

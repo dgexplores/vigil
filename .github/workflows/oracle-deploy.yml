@@ -1,0 +1,54 @@
+name: Deploy verified Vigil to Oracle
+on:
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: oracle-demo-deploy
+  cancel-in-progress: false
+jobs:
+  verify:
+    uses: ./.github/workflows/ci.yml
+  verify-arm:
+    uses: ./.github/workflows/oracle-arm.yml
+  deploy:
+    needs: [verify, verify-arm]
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    environment: oracle-demo
+    timeout-minutes: 55
+    env:
+      DEPLOY_ENABLED: ${{ vars.ORACLE_DEPLOYMENT_ENABLED }}
+      ORACLE_HOST: ${{ vars.ORACLE_HOST }}
+      DEMO_HOSTNAME: ${{ vars.ORACLE_DEMO_HOSTNAME }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+          persist-credentials: false
+      - name: Validate explicit deployment configuration
+        run: |
+          set -euo pipefail
+          test "$DEPLOY_ENABLED" = true || { echo 'Oracle deployment is disabled'; exit 1; }
+          [[ "$ORACLE_HOST" =~ ^[a-zA-Z0-9.-]+$ ]]
+          [[ "$DEMO_HOSTNAME" =~ ^[a-zA-Z0-9.-]+$ ]]
+      - name: Configure pinned SSH access
+        env:
+          SSH_KEY: ${{ secrets.ORACLE_SSH_KEY }}
+          KNOWN_HOSTS: ${{ secrets.ORACLE_KNOWN_HOSTS }}
+        run: |
+          set -euo pipefail
+          test -n "$SSH_KEY" && test -n "$KNOWN_HOSTS"
+          install -m 700 -d ~/.ssh
+          printf '%s\n' "$SSH_KEY" > ~/.ssh/vigil
+          printf '%s\n' "$KNOWN_HOSTS" > ~/.ssh/known_hosts
+          chmod 600 ~/.ssh/vigil ~/.ssh/known_hosts
+      - name: Upload attributed revision and deploy persistent services
+        run: |
+          set -euo pipefail
+          tar --exclude=.git --exclude='*/.git' -czf "$RUNNER_TEMP/vigil-$GITHUB_SHA.tgz" .
+          scp -i ~/.ssh/vigil -o BatchMode=yes -o StrictHostKeyChecking=yes "$RUNNER_TEMP/vigil-$GITHUB_SHA.tgz" "ubuntu@$ORACLE_HOST:/opt/vigil/"
+          ssh -i ~/.ssh/vigil -o BatchMode=yes -o StrictHostKeyChecking=yes "ubuntu@$ORACLE_HOST" bash -s -- "$GITHUB_SHA" "$DEMO_HOSTNAME" < deploy/oracle/release.sh
+      - name: Remove temporary runner key
+        if: always()
+        run: rm -f ~/.ssh/vigil

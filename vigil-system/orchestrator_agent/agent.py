@@ -626,6 +626,7 @@ class OrchestratorService:
 
         message_text = (
             "Transaction alert received.\n"
+            "All amounts are integer cents; 150000 means $1,500.00. Convert cents to dollars in summaries.\n"
             f"Risk threshold: {self.risk_threshold:.2f}\n"
             "Analyze the details, call InvestigationAgent first, and escalate only when warranted.\n"
             "When invoking ActuatorAgent, use JSON of the form {\"action\": \"lock_account\", \"account_id\": \"...\", \"ext_user_id\": \"...\", \"reason\": \"...\"}.\n"
