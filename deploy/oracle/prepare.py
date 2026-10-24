@@ -74,6 +74,14 @@ def prepare(state, hostname, key_file=None):
         context = BANK / 'src' / path
         java = name in ['ledgerwriter', 'balancereader', 'transactionhistory']
         build = {'context': str(context), 'dockerfile': str(ROOT / 'deploy/oracle/Java.Dockerfile') if java else str(context / 'Dockerfile')}
+        if name in ['userservice', 'contacts', 'frontend']:
+            # Adapt the pinned upstream build without modifying the submodule.
+            suffix = "\nRUN sed -i 's/create_engine(uri)/create_engine(uri, pool_pre_ping=True)/' db.py\n"
+            if name == 'frontend':
+                suffix = "\nRUN sed -i 's/{{ platform_display_name }}/Oracle Always Free/g' templates/shared/platform_banner.html\n"
+            dockerfile = state / (name + '.Dockerfile')
+            dockerfile.write_text((context / 'Dockerfile').read_text() + suffix)
+            build['dockerfile'] = str(dockerfile)
         svc = {'build': build, 'image': 'vigil-local/' + name + ':arm64', 'restart': 'unless-stopped', 'environment': env, 'mem_limit': '512m' if java else {'frontend': '128m', 'userservice': '192m', 'contacts': '128m'}.get(name, '256m'), 'logging': {'driver': 'json-file', 'options': {'max-size': '5m', 'max-file': '2'}}}
         if java:
             # Upstream metric labels parse the prefix before the first hyphen.
