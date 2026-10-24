@@ -1,10 +1,18 @@
 """Check real bank service readiness and ledger enforcement without LLM calls."""
 import argparse
+import http.cookiejar
 import json
 from pathlib import Path
 import subprocess
 import time
 import urllib.request
+import urllib.error
+import urllib.parse
+
+
+class NoRedirect(urllib.request.HTTPRedirectHandler):
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        return None
 
 
 def verify(compose, timeout=300):
@@ -28,6 +36,22 @@ def verify(compose, timeout=300):
         time.sleep(5)
     with urllib.request.urlopen('http://127.0.0.1:8080/ready', timeout=10) as response:
         assert response.status == 200
+    # Exercise the UI -> userservice -> JWT -> balance/history routes using only
+    # the upstream fictional demo account. Never print its session cookie.
+    cookies = http.cookiejar.CookieJar()
+    browser = urllib.request.build_opener(urllib.request.HTTPCookieProcessor(cookies), NoRedirect())
+    form = urllib.parse.urlencode({'username': 'testuser', 'password': 'bankofanthos'}).encode()
+    try:
+        browser.open('http://127.0.0.1:8080/login', data=form, timeout=30)
+        raise RuntimeError('Expected login redirect')
+    except urllib.error.HTTPError as response:
+        if response.code != 302 or urllib.parse.urlparse(response.headers.get('Location', '')).path != '/home':
+            raise RuntimeError('Demo login failed') from None
+    if not list(cookies):
+        raise RuntimeError('Demo login did not create a session')
+    with browser.open('http://127.0.0.1:8080/home', timeout=30) as response:
+        if response.status != 200 or b'Current Balance' not in response.read():
+            raise RuntimeError('Authenticated bank home did not render')
     # Everything is rolled back, including the synthetic lock and probe transfer.
     sql = """BEGIN;
 INSERT INTO vigil_account_locks(account_id) VALUES ('9999999001') ON CONFLICT DO NOTHING;
@@ -43,7 +67,7 @@ END $$;
 ROLLBACK;
 """
     subprocess.run(command + ['exec', '-T', 'ledger-db', 'psql', '-U', 'admin', '-d', 'postgresdb', '-v', 'ON_ERROR_STOP=1'], input=sql, text=True, check=True, capture_output=True)
-    print('PASS: bank readiness, actual PostgreSQL lock enforcement, and rollback of test data')
+    print('PASS: bank readiness, demo login/home routing, actual PostgreSQL lock enforcement, and rollback of test data')
     print('Live Gemini investigation is a separate required release check.')
 
 

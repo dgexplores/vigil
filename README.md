@@ -6,7 +6,7 @@
 
 Maintained by [dgexplores](https://github.com/dgexplores). This is an engineering extension of the [original Vigil project](https://github.com/ayanliger/gke-turns10-hackathon-vigil), with upstream authorship and notices retained.
 
-> **Deployment status:** the application is verified locally and its full GitHub CI has passed. The GKE backend and live Gemini inference are not deployed or verified in this adaptation. No live banking/AI application URL is claimed here. See [deployment readiness](docs/DEPLOYMENT_READINESS.md).
+> **Deployment status:** local verification and standard GitHub CI have passed. An Oracle Always Free ARM deployment is in progress; live Gemini investigation and the public HTTPS release are still pending verification. No live application URL is claimed yet. See the [Oracle deployment guide](deploy/oracle/README.md) and [original GKE readiness](docs/DEPLOYMENT_READINESS.md).
 
 [Read the source](https://github.com/dgexplores/vigil) · [See the successful CI run](https://github.com/dgexplores/vigil/actions/runs/39825812137) · [Review the engineering contributions](PORTFOLIO.md)
 
@@ -35,7 +35,7 @@ A lock does **not** reverse the original transfer or disable the customer's logi
 
 ## Architecture: how the pieces talk
 
-The deployment target remains **Google Kubernetes Engine**, with Bank of Anthos as the banking demonstration application. The agents are separate Python services; the database toolbox is an upstream Go component.
+The original architecture targets **Google Kubernetes Engine**, with Bank of Anthos as the banking demonstration application. The agents are separate Python services; the database toolbox is an upstream Go component. The optional [Oracle ARM deployment](deploy/oracle/README.md) preserves those service boundaries with Docker Compose on one Always Free VM; it does not provide Kubernetes scheduling or high availability.
 
 ```mermaid
 flowchart TB
