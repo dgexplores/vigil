@@ -187,6 +187,7 @@ vigil/
 | Service and database suite | **25 tests passed with real PostgreSQL 17** | Live Gemini quality or deployed GKE behavior |
 | Monitor's own environment | **13 monitor tests passed**, also inside its packaged container | Exactly-once remote execution |
 | GitHub Actions | [Full CI passed](https://github.com/dgexplores/vigil/actions/runs/39825812137): Python, database contract, audit, and all five image builds | A successful cloud rollout |
+| Oracle live release | [CI and automated deployment passed](https://github.com/dgexplores/vigil/actions/runs/40063802734); live investigation, locks, login and restart persistence checked | Production fraud accuracy or high availability |
 | Actual local integrations | Toolbox HTTP tools and actuator-to-toolbox-to-PostgreSQL locking passed with synthetic data | Real customer banking controls |
 | Publication scan | Full publication history had no detected leaks in the recorded Gitleaks scan | Absence of unknown secrets or vulnerabilities |
 

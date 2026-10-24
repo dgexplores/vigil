@@ -8,6 +8,8 @@ original GKE files remain available. The Gemini key's project was inspected
 through Google APIs and reported `billingEnabled=false`. No paid upgrade was
 selected. Model capacity and free-tier quotas can still limit availability.
 
+Automated release: [all CI jobs and Oracle deployment passed](https://github.com/dgexplores/vigil/actions/runs/40063802734), application revision `912989c08167984e5767b3acb6beda8cda56300f`.
+
 ## Observed release checks
 
 - Public DNS resolved to the VM, Caddy obtained a Let's Encrypt certificate,
@@ -30,6 +32,8 @@ selected. Model capacity and free-tier quotas can still limit availability.
 - The second completed orchestration described 150000 cents as **$1,500.00**,
   following an explicit correction to both agents' unit instructions.
 - The monitor then reported two delivered alerts and zero pending alerts.
+- Restarting both databases and the monitor preserved 62 transactions, two locks, and both delivered outbox records. The first login after restart passed after enabling SQLAlchemy connection pre-ping in the Oracle build.
+- The automated rollout recreated the services from the selected GitHub revision and passed bank, agent, ledger and public HTTPS checks. The original ADYA application directories were then removed after rechecking their local backup checksum; the unused Ollama service was stopped and disabled.
 
 These are controlled integration checks, not evidence of measured fraud
 accuracy. The destination and transaction patterns were deliberately synthetic;
