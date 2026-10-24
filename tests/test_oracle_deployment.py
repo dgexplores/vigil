@@ -42,3 +42,18 @@ class OracleDeploymentTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temp:
             with self.assertRaises(ValueError):
                 module.prepare(temp, 'demo.example.com\nmalformed')
+
+    def test_optional_portfolio_edge_survives_later_release_render(self):
+        with tempfile.TemporaryDirectory() as temp:
+            state = Path(temp) / 'private-state'
+            public = Path(temp).resolve() / 'public-sites'
+            module.prepare(state, 'vigil.example.com', portfolio_dir=public)
+            # A later CI release omits the option; it must preserve the live route.
+            output = module.prepare(state, 'vigil.example.com')
+            document = json.loads(output.read_text())
+            self.assertTrue(document['networks']['portfolio-edge']['external'])
+            self.assertEqual(document['services']['web']['networks'], ['default', 'portfolio-edge'])
+            self.assertIn(str(public / 'www') + ':/srv/portfolio:ro', document['services']['web']['volumes'])
+            self.assertIn('import /etc/caddy/sites/*.caddy', (state / 'Caddyfile').read_text())
+            for name in ['ledger-db', 'accounts-db', 'orchestrator-agent', 'actuator-agent']:
+                self.assertNotIn('networks', document['services'][name])

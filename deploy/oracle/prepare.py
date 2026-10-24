@@ -14,7 +14,7 @@ ROOT = Path(__file__).resolve().parents[2]
 BANK = ROOT / 'bank-of-anthos'
 
 
-def prepare(state, hostname, key_file=None):
+def prepare(state, hostname, key_file=None, portfolio_dir=None):
     if not hostname or any(c not in 'abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789.-' for c in hostname):
         raise ValueError('Use a DNS hostname without spaces or URL paths')
     state = Path(state).resolve()
@@ -22,6 +22,17 @@ def prepare(state, hostname, key_file=None):
         raise ValueError('State must be outside the Git checkout')
     state.mkdir(parents=True, exist_ok=True, mode=0o700)
     state.chmod(0o700)
+    portfolio_file = state / 'portfolio.json'
+    if portfolio_dir is None and portfolio_file.exists():
+        portfolio_dir = json.loads(portfolio_file.read_text())['directory']
+    if portfolio_dir is not None:
+        portfolio_dir = Path(portfolio_dir).resolve()
+        if portfolio_dir == ROOT or ROOT in portfolio_dir.parents:
+            raise ValueError('Public portfolio files must be outside the Git checkout')
+        for folder in [portfolio_dir, portfolio_dir / 'www', portfolio_dir / 'caddy']:
+            folder.mkdir(parents=True, exist_ok=True, mode=0o755)
+        portfolio_file.write_text(json.dumps({'directory': str(portfolio_dir)}))
+        portfolio_file.chmod(0o600)
     config_file = state / 'credentials.json'
     if config_file.exists():
         credentials = json.loads(config_file.read_text())
@@ -131,7 +142,14 @@ def prepare(state, hostname, key_file=None):
         services[name] = svc
     (state / 'Caddyfile').write_text(f'{hostname} {{\n  reverse_proxy frontend:8080\n}}\n')
     services['web'] = {'image': 'caddy:2', 'restart': 'unless-stopped', 'ports': ['80:80', '443:443'], 'volumes': [str(state / 'Caddyfile') + ':/etc/caddy/Caddyfile:ro', 'caddy-data:/data', 'caddy-config:/config'], 'depends_on': {'frontend': {'condition': 'service_healthy'}}, 'mem_limit': '128m'}
+    if portfolio_dir is not None:
+        with (state / 'Caddyfile').open('a') as config:
+            config.write('import /etc/caddy/sites/*.caddy\n')
+        services['web']['volumes'] += [str(portfolio_dir / 'caddy') + ':/etc/caddy/sites:ro', str(portfolio_dir / 'www') + ':/srv/portfolio:ro']
+        services['web']['networks'] = ['default', 'portfolio-edge']
     document = {'name': 'vigil', 'services': services, 'volumes': {name: {} for name in ['ledger-db', 'accounts-db', 'monitor-state', 'caddy-data', 'caddy-config']}}
+    if portfolio_dir is not None:
+        document['networks'] = {'default': {}, 'portfolio-edge': {'name': 'portfolio-edge', 'external': True}}
     output = state / 'compose.json'
     output.write_text(json.dumps(document, indent=2))
     output.chmod(0o600)
@@ -143,5 +161,6 @@ if __name__ == '__main__':
     parser.add_argument('--state-dir', required=True)
     parser.add_argument('--hostname', required=True)
     parser.add_argument('--gemini-key-file')
+    parser.add_argument('--portfolio-dir', help='Optional shared public web/config directory; preserved for later releases')
     args = parser.parse_args()
-    print(prepare(args.state_dir, args.hostname, args.gemini_key_file))
+    print(prepare(args.state_dir, args.hostname, args.gemini_key_file, args.portfolio_dir))

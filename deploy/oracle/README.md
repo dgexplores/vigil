@@ -61,6 +61,21 @@ Agent APIs and databases have no public host ports. The frontend binds only to
 localhost; Caddy exposes ports 80 and 443 for HTTPS. Verify the chosen DNS name
 resolves to the VM and that those ports are allowed before requesting a certificate.
 
+### Share HTTPS with a second portfolio application
+
+The optional `--portfolio-dir /opt/portfolio` setting keeps Caddy as the only
+public entry point. Create the external Docker network `portfolio-edge` first.
+The renderer mounts `/opt/portfolio/caddy` and `/opt/portfolio/www` read-only
+into Caddy and imports the `*.caddy` site files. Only the web container joins
+that network; Vigil's databases and agent APIs stay on its private network.
+Keep public assets separate from private application state and credentials.
+
+The selected directory is saved in the private state directory as
+`portfolio.json`. Later CI releases preserve this setting without repeating the
+flag, so deploying Vigil does not remove the second application's HTTPS route.
+Validate the complete Caddy configuration before reloading it. The second
+application owns its site file, assets, backend container, and persistent data.
+
 The `agents` profile requires an actual Gemini key and model access. The Oracle
 configuration selects `gemini-3.5-flash-lite`; `GEMINI_MODEL` is configurable. Free
 hosting does not establish eligibility for free Gemini inference. Configure and
