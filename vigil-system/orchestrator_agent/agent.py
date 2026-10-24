@@ -572,7 +572,7 @@ class OrchestratorService:
 
         self.llm_agent = LlmAgent(
             name="orchestrator_agent",
-            model=Gemini(api_key=GEMINI_API_KEY, model="gemini-2.5-flash"),
+            model=Gemini(api_key=GEMINI_API_KEY, model=os.environ.get("GEMINI_MODEL", "gemini-2.5-flash")),
             instruction=instruction,
             tools=[
                 investigation_tool,
