@@ -1,201 +1,205 @@
-# Vigil — From a suspicious transfer to an enforceable decision
+# Vigil
+
+### From a suspicious transfer to an enforceable decision
+
+A Python AI-agent workflow that monitors a banking demo, investigates unusual
+transfers, and blocks future outgoing payments when its risk policy is met.
+
+**[Open the live demo →](https://vigil-161-118-164-31.sslip.io/login)** ·
+[Cloud verification](docs/ORACLE_VERIFICATION.md) ·
+[Engineering contributions](PORTFOLIO.md) ·
+[Deployment guide](deploy/oracle/README.md)
 
 [![Verify Vigil](https://github.com/dgexplores/vigil/actions/workflows/ci.yml/badge.svg)](https://github.com/dgexplores/vigil/actions/workflows/ci.yml)
+[![Oracle deployment](https://github.com/dgexplores/vigil/actions/workflows/oracle-deploy.yml/badge.svg)](https://github.com/dgexplores/vigil/actions/workflows/oracle-deploy.yml)
 
-**A Python AI-agent workflow that monitors a banking demo, investigates flagged transfers, and can block future outgoing payments from a risky account.**
+Maintained by [dgexplores](https://github.com/dgexplores), extending the
+[original Vigil project](https://github.com/ayanliger/gke-turns10-hackathon-vigil)
+and Google's Bank of Anthos. Upstream authorship is retained.
 
-Maintained by [dgexplores](https://github.com/dgexplores). This is an engineering extension of the [original Vigil project](https://github.com/ayanliger/gke-turns10-hackathon-vigil), with upstream authorship and notices retained.
+## Try the live demo
 
-> **Live Oracle demo:** [Open Vigil](https://vigil-161-118-164-31.sslip.io/login). Use the fictional demo login **`testuser` / `bankofanthos`**. The banking UI is public; AI investigation, database tools, and actuator APIs run privately in the background. This uses an Oracle Always Free ARM host and a Gemini project with billing disabled. Free-tier capacity and inference availability can vary.
+| | Details |
+|---|---|
+| **Deployed application** | **[vigil-161-118-164-31.sslip.io](https://vigil-161-118-164-31.sslip.io/login)** |
+| **Demo username** | `testuser` |
+| **Demo password** | `bankofanthos` |
+| **Hosting** | Oracle Always Free ARM VM · Docker Compose · Caddy HTTPS |
+| **AI model** | Gemini 3.5 Flash-Lite · project billing disabled |
 
-[Read the source](https://github.com/dgexplores/vigil) · [See the successful CI run](https://github.com/dgexplores/vigil/actions/runs/39825812137) · [Review the engineering contributions](PORTFOLIO.md)
+1. Sign in to explore the fictional balance, contacts, and transaction history.
+2. Small payments exercise the banking routes. Transfers above **$1,000** enter
+   Vigil's background review; a high risk assessment can lock the sender.
+3. Read the [verified cloud walkthrough](docs/ORACLE_VERIFICATION.md) to see how
+   an alert became an investigation, a database lock, and a rejected later transfer.
 
-## What you can explore
+The public page is the banking interface. Investigation and action happen in
+private background services; there is no separate public AI chat or agent API.
+**Use fictional data only.** This is a portfolio demonstration, not an actual bank.
+Free hosting capacity and model quotas can affect availability.
 
-Sign in to view the fictional account balance and transaction history. Small
-payments exercise ordinary bank routing. Transfers above $1,000 enter Vigil's
-background review; a high model risk score can lock the sender against future
-outgoing ledger transfers. A lock does not log the user out. Do not enter real
-banking or personal information.
+## The story: why one transfer needs a workflow
 
-The UI is the upstream banking demo, rather than a chat interface. The
-[cloud verification record](docs/ORACLE_VERIFICATION.md) explains the synthetic
-investigation, enforced lock, and restart checks behind the demo.
+A customer sends **$1,500**. The amount alone does not establish fraud. An
+operations analyst needs the account's history, an assessment of the unusual
+activity, and a reliable way to apply the resulting decision.
 
-## The story: one transfer, several unanswered questions
-
-Imagine a fictional customer sending **$1,500**. The amount alone does not prove fraud. An operations analyst still needs to know: Is this unusual for the account? What happened before it? What should happen next?
-
-Vigil connects those steps into one workflow. A monitor notices the transfer, an investigation agent gathers context, and an orchestrator coordinates the decision. If the risk meets a configured policy, an actuator records an account lock in PostgreSQL. A database trigger then rejects future outgoing transfers from that local account.
-
-The interesting engineering problem is what happens between those steps: a service can fail, a worker can restart, an alert can be retried, or an LLM can return an invalid answer. This extension focuses on making those boundaries explicit and testable.
-
-The example below is illustrative, not a live fraud result. Bank of Anthos stores money in **integer cents**: `$1,500 = 150000`. To flag amounts above `$1,000`, configure `FRAUD_THRESHOLD=100000`; the inherited default of `1000` means **$10**, not $1,000.
+Vigil connects those steps. The monitor observes the transfer, the investigation
+agent gathers context, and the orchestrator coordinates the response. When the
+risk score meets policy and the account identity matches, the actuator records
+an account lock in PostgreSQL. A trigger rejects later outgoing transfers from
+that local account.
 
 ```mermaid
 flowchart LR
-    T["Synthetic transfer<br/>$1,500"] --> M["Monitor<br/>amount rule"]
-    M --> I["Investigate<br/>account + transfer history"]
-    I --> R["Illustrative model assessment<br/>risk score 8/10"]
-    R --> P{"Policy satisfied?<br/>score ≥ 7 + correct account"}
+    T["Transfer<br/>$1,500"] --> M["Monitor<br/>amount > $1,000"]
+    M --> I["Investigate<br/>profile + transfer history"]
+    I --> P{"Valid assessment?<br/>risk ≥ 7 + matching account"}
     P -- Yes --> L["Record account lock"]
     P -- No --> N["Complete without locking"]
-    L --> B["Reject future local<br/>outgoing ledger inserts"]
+    L --> B["Reject future local<br/>outgoing transfers"]
 ```
 
-A lock does **not** reverse the original transfer or disable the customer's login. The initial amount rule is not a trained fraud classifier, and the model's fraud accuracy has not been measured here.
+The live synthetic checks exercised this path and confirmed the database lock.
+They do **not** establish fraud accuracy. A lock neither reverses the initial
+transfer nor disables the customer's login. Amounts are stored in **integer
+cents**: `$1,500 = 150000` and the deployed alert threshold is `100000` cents.
 
-## Live deployment: the same service boundaries on Oracle
-
-```mermaid
-flowchart LR
-    Browser[Recruiter browser] -->|HTTPS| Caddy
-    subgraph Oracle[Oracle Always Free ARM VM]
-        Caddy --> Bank[Bank of Anthos services]
-        Bank --> Accounts[(Accounts PostgreSQL)]
-        Bank --> Ledger[(Ledger PostgreSQL + lock trigger)]
-        Accounts --> Toolbox[GenAI Toolbox]
-        Ledger --> Toolbox
-        Monitor[Monitor + durable SQLite outbox] --> Toolbox
-        Monitor --> Orchestrator
-        Orchestrator --> Investigation
-        Investigation --> Toolbox
-        Orchestrator --> Actuator
-        Actuator --> Toolbox
-    end
-    Investigation --> Gemini[Gemini 3.5 Flash-Lite]
-    Orchestrator --> Gemini
-```
-
-Only Caddy exposes public application ports. Databases, Toolbox, and agent APIs
-stay on the container network. This is a single-host portfolio deployment;
-the [Oracle guide](deploy/oracle/README.md) explains its configuration and limits.
-
-## Architecture: how the pieces talk
-
-The original architecture targets **Google Kubernetes Engine**, with Bank of Anthos as the banking demonstration application. The agents are separate Python services; the database toolbox is an upstream Go component. The optional [Oracle ARM deployment](deploy/oracle/README.md) preserves those service boundaries with Docker Compose on one Always Free VM; it does not provide Kubernetes scheduling or high availability.
+## Architecture of the live application
 
 ```mermaid
 flowchart TB
-    subgraph GKE["Deployment target: Google Kubernetes Engine"]
-        BANK["Bank of Anthos<br/>banking UI and services"] --> LEDGER[("PostgreSQL ledger")]
-        ACCOUNTS[("PostgreSQL accounts")]
-        TOOLBOX["GenAI Toolbox 0.16.0<br/>parameterized SQL tools"]
-        TOOLBOX <--> LEDGER
-        TOOLBOX <--> ACCOUNTS
-        MONITOR["Transaction monitor<br/>Python background worker"] --> TOOLBOX
-        MONITOR <--> OUTBOX[("SQLite outbox + cursor<br/>persistent volume")]
-        MONITOR -->|"A2A alert"| ORCH["Orchestrator<br/>Google ADK + policy guards"]
-        ORCH -->|"A2A investigation"| INVEST["Investigation agent"]
-        INVEST --> TOOLBOX
-        ORCH -->|"A2A action"| ACT["Actuator agent"]
-        ACT -->|"lock-account tool"| TOOLBOX
-        LEDGER --> GUARD["Lock table + ledger trigger"]
+    Browser[Recruiter browser] -->|HTTPS| Caddy
+    subgraph OCI[Oracle Always Free ARM VM]
+        Caddy --> Bank[Bank of Anthos services]
+        Bank --> Accounts[(Accounts PostgreSQL)]
+        Bank --> Ledger[(Ledger PostgreSQL + lock trigger)]
+        Toolbox[GenAI Toolbox] <--> Accounts
+        Toolbox <--> Ledger
+        Monitor[Transaction monitor] --> Toolbox
+        Monitor <--> Outbox[(Persistent SQLite outbox + cursor)]
+        Monitor -->|A2A alert| Orchestrator
+        Orchestrator -->|Investigate| Investigation
+        Investigation --> Toolbox
+        Orchestrator -->|Apply policy| Actuator
+        Actuator -->|Parameterized lock operation| Toolbox
     end
-    GEMINI["Gemini API<br/>external model service"]
-    ORCH <--> GEMINI
-    INVEST <--> GEMINI
+    Investigation --> Gemini[Gemini API]
+    Orchestrator --> Gemini
 ```
 
-| Component | Its job | Where to read |
+Only Caddy exposes public application ports. The databases, Toolbox, and agent
+APIs remain on the private container network. Separate volumes retain account
+data, transactions, monitor delivery state, and certificates across restarts.
+This is a single-host deployment; it does not provide high availability.
+
+| Component | Responsibility | Source |
 |---|---|---|
-| Transaction monitor | Poll transfers, apply the amount rule, persist pending alerts, retry delivery | [`agent.py`](vigil-system/transaction_monitor_agent/agent.py), [`delivery_store.py`](vigil-system/transaction_monitor_agent/delivery_store.py) |
-| Orchestrator | Coordinate investigation and action while enforcing deterministic account/risk checks | [`agent.py`](vigil-system/orchestrator_agent/agent.py) |
-| Investigation agent | Fetch context and validate the model's structured risk assessment | [`agent.py`](vigil-system/investigation_agent/agent.py) |
-| Actuator | Request a lock and require a matching database result before reporting success | [`agent.py`](vigil-system/actuator_agent/agent.py) |
-| Database toolbox | Expose parameterized transaction, profile, history, and lock operations | [`tools.yaml`](vigil-system/genal_toolbox/tools.yaml) |
-| Ledger migration | Store locks and reject future outgoing transfers from locked local accounts | [`001_account_locks.sql`](vigil-system/genal_toolbox/migrations/001_account_locks.sql) |
+| **Monitor** | Poll transactions, persist alerts, deduplicate IDs, retry delivery | [Monitor](vigil-system/transaction_monitor_agent/agent.py), [outbox](vigil-system/transaction_monitor_agent/delivery_store.py) |
+| **Orchestrator** | Coordinate agents and enforce risk/account policy | [Agent](vigil-system/orchestrator_agent/agent.py) |
+| **Investigation** | Retrieve context and validate Gemini's structured assessment | [Agent](vigil-system/investigation_agent/agent.py) |
+| **Actuator** | Apply a lock and require a matching database result | [Agent](vigil-system/actuator_agent/agent.py) |
+| **Toolbox** | Expose parameterized profile, history, transaction and lock queries | [SQL tools](vigil-system/genal_toolbox/tools.yaml) |
+| **Ledger guard** | Enforce account locks when outgoing transactions are inserted | [Migration](vigil-system/genal_toolbox/migrations/001_account_locks.sql) |
 
-**Stack:** Python 3.11, asyncio, FastAPI, HTTPX, Google ADK, A2A SDK, Gemini, PostgreSQL, SQLite, Docker, Kubernetes, and GitHub Actions.
+**Technology:** Python 3.11 · FastAPI · asyncio · HTTPX · Google ADK · A2A SDK ·
+Gemini · PostgreSQL · SQLite · Docker · Caddy · Kubernetes manifests · GitHub Actions.
 
-## Follow a transaction through the system
+<details>
+<summary><strong>Follow the complete message and acknowledgement sequence</strong></summary>
 
 ```mermaid
 sequenceDiagram
     participant M as Monitor
     participant S as Durable outbox
     participant O as Orchestrator
-    participant I as Investigation agent
+    participant I as Investigation
     participant A as Actuator
     participant D as Toolbox + PostgreSQL
-    M->>D: Poll transactions from the saved UTC cursor
+    M->>D: Poll from saved UTC cursor
     D-->>M: Observed transactions
-    M->>S: Atomically save observed IDs and cursor
+    M->>S: Atomically persist IDs and cursor
     M->>O: Send pending alert with stable message ID
-    O->>I: Investigate the original transaction
-    I->>D: Read account context and history
+    O->>I: Investigate original transaction
+    I->>D: Read account profile and recent history
     Note over I: Request and validate Gemini assessment
     I-->>O: Structured risk assessment
     alt Risk and account checks pass
         O->>A: Request account lock
-        A->>D: Upsert account lock
+        A->>D: Upsert lock
         D-->>A: Return matching account row
         A-->>O: Confirm lock
-    else Below threshold or invalid assessment
-        Note over O: No successful lock is reported
+    else Policy not met or assessment invalid
+        Note over O: No successful lock reported
     end
     O-->>M: Application-level result
     alt Completed acknowledgement
-        M->>S: Mark alert delivered
-    else Failure or incomplete acknowledgement
-        M->>S: Keep pending for retry
+        M->>S: Mark delivered
+    else Failed or incomplete acknowledgement
+        M->>S: Retain pending alert for retry
     end
 ```
 
-The model contributes an assessment. The code checks finite risk scores, the configured threshold, and the original account identity before allowing actuation. A failed investigation or lock operation is reported as a failure rather than a successful outcome.
+</details>
 
-## What this extension improves
+## Engineering work in this extension
 
-| Failure an operations team would notice | Engineering change |
+| Operational problem | Implemented change |
 |---|---|
-| A worker restarts and forgets undelivered alerts | Persist the cursor and outbox in SQLite on a mounted volume |
-| An alert fails after polling has advanced | Retry pending alerts independently of the next successful poll |
-| The same transfer appears in repeated polls | Deduplicate observed transaction IDs and reuse a stable alert ID |
-| Two transfers share a timestamp | Use an inclusive UTC polling boundary plus ID deduplication |
-| Parallel investigations mix their context | Keep orchestration state isolated per request |
-| A model proposes locking the wrong account or acts below policy | Check the original account and risk threshold deterministically |
-| A service says “locked” without confirming a database change | Require the matching returned database row |
-| A lock is only a label in application memory | Enforce it with an additive PostgreSQL table and ledger trigger |
+| A restart loses undelivered alerts | Durable SQLite cursor and outbox on a persistent volume |
+| Polling advances before an alert succeeds | Retry pending alerts independently of later polls |
+| Repeated polls or equal timestamps repeat/miss transfers | Inclusive UTC boundary, ID deduplication, stable message IDs |
+| Concurrent investigations mix context | Request-scoped orchestration state |
+| A model proposes the wrong account or an action below threshold | Deterministic account, finite-score, and policy checks |
+| A service reports a lock without changing the database | Require the matching returned account row and enforce a ledger trigger |
+| ARM packaging and database restarts expose upstream assumptions | Native source builds, corrected Java entry point, stable hostnames, connection pre-ping |
+| A deployment loses state or exposes internal services | Persistent volumes, private service ports, generated credentials, verified CI/CD |
 
-These changes provide **at-least-once delivery**, not distributed exactly-once execution. A crash between a remote action and its acknowledgement can repeat an action; the lock upsert is idempotent. Older late-arriving rows, unbounded retention, and large polling batches remain documented limits.
+Delivery is **at least once**. A crash between a remote action and its
+acknowledgement can repeat that action; the lock upsert is idempotent. There is
+no distributed exactly-once claim. See [contributions](PORTFOLIO.md) and
+[reconstruction notes](docs/RECONSTRUCTION.md) for scope and provenance.
+
+## Verified results
+
+| Check | Recorded evidence |
+|---|---|
+| **Live HTTPS and banking routes** | Browser login, balance, contacts and transaction history worked |
+| **Live AI workflow** | Two synthetic alerts completed investigation and database-confirmed locking |
+| **Actual enforcement** | PostgreSQL rejected a later outgoing transfer from a locked sender |
+| **Restart recovery** | Retained 62 transactions, two locks, and two delivered outbox records; first login after restart passed |
+| **Cloud delivery** | [All CI jobs and automated Oracle rollout passed](https://github.com/dgexplores/vigil/actions/runs/40063802734) |
+| **Regression coverage** | Offline Python checks, packaged monitor checks, and a separate real PostgreSQL contract job |
+
+The checks use synthetic data and do not measure production fraud precision,
+recall, throughput, or high availability. Detailed dates, revisions, test counts,
+and limitations are in [Oracle verification](docs/ORACLE_VERIFICATION.md),
+[local verification](docs/LOCAL_VERIFICATION.md), and [service evidence](docs/SERVICE_EVIDENCE.md).
 
 ## Project structure
 
 ```text
 vigil/
-├── bank-of-anthos/                 # Attributed, pinned Google banking submodule
+├── bank-of-anthos/                 # Pinned, attributed banking submodule
 ├── vigil-system/
-│   ├── transaction_monitor_agent/  # Polling, durable outbox, persistent volume
-│   ├── orchestrator_agent/         # A2A coordination and policy checks
+│   ├── transaction_monitor_agent/  # Polling, durable cursor and outbox
+│   ├── orchestrator_agent/         # Coordination and deterministic policy
 │   ├── investigation_agent/        # Context retrieval and Gemini assessment
-│   ├── actuator_agent/             # Database-confirmed account locking
-│   └── genal_toolbox/              # SQL tools, pinned image, ledger migration
-├── tests/                         # Delivery, service, tracing and database contracts
-├── scripts/                       # Synthetic toolbox verification helper
+│   ├── actuator_agent/             # Database-confirmed account locks
+│   └── genal_toolbox/              # SQL tools and ledger migration
+├── deploy/oracle/                 # ARM builds, configuration, release and checks
+├── tests/                         # Delivery, service and database contracts
+├── scripts/                       # Integration verification helpers
 ├── .github/workflows/
-│   ├── ci.yml                     # Tests, audits, five image builds
-│   └── deploy.yml                 # Manually gated GKE rollout through OIDC
-├── docs/                          # Architecture evidence, setup and release limits
-├── Makefile                       # Install and verify local environments
-└── PORTFOLIO.md                    # Contribution record and role alignment
+│   ├── ci.yml                     # Python, PostgreSQL, audits and image builds
+│   ├── oracle-arm.yml             # Native ARM banking runtime verification
+│   ├── oracle-deploy.yml          # Verified deployment to the existing Oracle VM
+│   └── deploy.yml                 # Original GKE rollout through GitHub OIDC
+├── docs/                          # Architecture, evidence and operator guides
+└── PORTFOLIO.md                    # Contributions and role alignment
 ```
 
-## Evidence: what has actually been checked
-
-| Check | Verified result | What it does not establish |
-|---|---|---|
-| Service and database suite | **25 tests passed with real PostgreSQL 17** | Live Gemini quality or deployed GKE behavior |
-| Monitor's own environment | **13 monitor tests passed**, also inside its packaged container | Exactly-once remote execution |
-| GitHub Actions | [Full CI passed](https://github.com/dgexplores/vigil/actions/runs/39825812137): Python, database contract, audit, and all five image builds | A successful cloud rollout |
-| Oracle live release | [CI and automated deployment passed](https://github.com/dgexplores/vigil/actions/runs/40063802734); live investigation, locks, login and restart persistence checked | Production fraud accuracy or high availability |
-| Actual local integrations | Toolbox HTTP tools and actuator-to-toolbox-to-PostgreSQL locking passed with synthetic data | Real customer banking controls |
-| Publication scan | Full publication history had no detected leaks in the recorded Gitleaks scan | Absence of unknown secrets or vulnerabilities |
-
-The 13 monitor checks are a repeated verification of that component in its own runtime, **not 13 additional distinct features or a separate accuracy benchmark**. See [local verification](docs/LOCAL_VERIFICATION.md), [service evidence](docs/SERVICE_EVIDENCE.md), and the [reconstruction ledger](docs/RECONSTRUCTION.md).
-
-## Try the verified checks locally
-
-Install Python 3.11, Make, and Git. Docker is needed for the optional real PostgreSQL checks and image builds.
+## Run the checks locally
 
 ```bash
 git clone --recurse-submodules https://github.com/dgexplores/vigil.git
@@ -204,65 +208,100 @@ make install
 make test
 ```
 
-`make install` creates two isolated environments: `.venv` for the shared ADK services and `.monitor-venv` for the monitor. Their pinned dependency sets must not be combined into one pip install.
+Use Python 3.11, Make and Git; Docker is needed for container and real database
+checks. `make install` creates separate ADK and monitor environments because
+their pinned dependencies must not be combined. The PostgreSQL contract is
+skipped unless `TEST_POSTGRES_DSN` points to a disposable test database.
+Offline tests do not need a Gemini key. Follow [local setup](docs/LOCAL_VERIFICATION.md)
+and the [Oracle deployment guide](deploy/oracle/README.md) for complete commands.
 
-Without `TEST_POSTGRES_DSN`, the real-database contract is explicitly skipped. To reproduce the full database result, follow the disposable PostgreSQL instructions in [LOCAL_VERIFICATION.md](docs/LOCAL_VERIFICATION.md). Offline checks do not require a Gemini key and do not call Google Cloud.
+## CI/CD and deployment
 
-## Endpoints and operator configuration
+```mermaid
+flowchart LR
+    Commit[GitHub revision] --> Tests[Python + PostgreSQL + audits]
+    Commit --> ARM[Native ARM build + banking runtime checks]
+    Tests --> Release[Manual release from main]
+    ARM --> Release
+    Release --> SSH[Pinned SSH host + dedicated deployment key]
+    SSH --> Build[Build selected revision on Oracle]
+    Build --> Start[Start services with retained state]
+    Start --> Verify[Check bank, agents, ledger and public HTTPS]
+```
 
-The banking UI belongs to Bank of Anthos. Vigil's APIs are internal service contracts; the monitor is a background worker.
+The Oracle workflow deploys to an existing host, keeps secrets outside Git,
+preserves named volumes, and waits for real service checks. It does not create
+paid cloud resources or provide an automatic database rollback. Configuration
+and recovery instructions are in the [deployment guide](deploy/oracle/README.md).
+
+<details>
+<summary><strong>Original GKE architecture and deployment option</strong></summary>
+
+The original Kubernetes manifests remain available. This adaptation's verified
+live deployment is Oracle; no GKE rollout is claimed.
+
+```mermaid
+flowchart LR
+    subgraph GKE[Google Kubernetes Engine]
+        Bank[Bank of Anthos] --> Ledger[(PostgreSQL ledger)]
+        Accounts[(Accounts PostgreSQL)] <--> Toolbox[GenAI Toolbox]
+        Ledger <--> Toolbox
+        Monitor[Monitor + persistent outbox] --> Toolbox
+        Monitor --> Orchestrator
+        Orchestrator --> Investigation
+        Orchestrator --> Actuator
+        Investigation --> Toolbox
+        Actuator --> Toolbox
+    end
+    Orchestrator --> Gemini[Gemini API]
+    Investigation --> Gemini
+```
+
+`deploy.yml` uses repository-scoped OIDC to update an existing GKE deployment.
+Its GCP deployment gate remains disabled. GKE compute cannot be promised free;
+see [GKE readiness](docs/DEPLOYMENT_READINESS.md) and [CI/CD details](docs/CI_CD.md).
+
+</details>
+
+<details>
+<summary><strong>Internal endpoints and operator settings</strong></summary>
 
 | Service | Routes | Container port |
 |---|---|---|
 | Orchestrator | `POST /`, `POST /a2a/send-message`, `GET /health` | 8000 |
 | Investigation | A2A routes, `POST /investigate`, `GET /health` | 8000 |
 | Actuator | A2A routes, `POST /execute`, `GET /health` | 8000 |
-| Toolbox | Parameterized SQL tools described in `tools.yaml` | 5000 |
+| Toolbox | Parameterized tools in `tools.yaml` | 5000 |
 
-Kubernetes services map their public service port to the container port; the supplied toolbox and agent services use internal port 80. An uninitialized agent returns 503 from its health endpoint. Keep these services private to the cluster; they are not public-user authentication endpoints.
+These routes are internal and must stay private. The monitor is a background
+worker. An uninitialized agent returns 503 from its health endpoint.
 
-| Setting | Meaning |
+| Setting | Oracle demo configuration |
 |---|---|
-| `FRAUD_THRESHOLD` | Initial amount rule in cents; inherited default `1000.0` is $10 |
-| `POLL_INTERVAL` | Polling interval; default 5 seconds |
-| `RISK_SCORE_THRESHOLD` | Minimum risk score for policy evaluation; default 7 |
-| `GEMINI_API_KEY` | Your own model credential, supplied outside Git |
-| `MONITOR_STATE_PATH` | Outbox/cursor file; `/data/monitor.sqlite3` in Kubernetes |
-| `MONITOR_START_TIMESTAMP` | Initial UTC lower bound for a new state database |
+| `FRAUD_THRESHOLD` | `100000` cents ($1,000); the inherited `1000` default means $10 |
+| `POLL_INTERVAL` | 15 seconds |
+| `RISK_SCORE_THRESHOLD` | 7 |
+| `GEMINI_MODEL` | `gemini-3.5-flash-lite` |
+| `GEMINI_API_KEY` | Runtime credential outside Git |
+| `MONITOR_STATE_PATH` | `/data/monitor.sqlite3` on a persistent volume |
+| `MONITOR_START_TIMESTAMP` | Preserved initial UTC boundary for new monitor state |
 
-## Deployment: prepared, with a clear release boundary
+</details>
 
-```mermaid
-flowchart LR
-    C["Code change"] --> V["GitHub CI<br/>tests + audits + image builds"]
-    V --> G{"Manual release gate<br/>account + approved costs"}
-    G --> ID["GitHub OIDC<br/>short-lived GCP identity"]
-    ID --> R["Publish revision images<br/>Artifact Registry"]
-    R --> SQL["Apply toolbox configuration<br/>and ledger migration"]
-    SQL --> K["Roll out agents in GKE<br/>wait for readiness"]
-    K --> CHECK["Verify synthetic transactions<br/>and record real deployment URL"]
-```
+## Scope and attribution
 
-The deployment workflow updates an existing cluster; it does not provision GKE or the banking application. Configure the account, registry, databases, secrets, persistent storage, and repository-scoped OIDC identity first. Apply the ledger migration before starting enforcement, and run one monitor replica with the supplied volume.
+This project demonstrates Python application development, REST/A2A integration,
+SQL contracts, automation, debugging, model-output validation, containers, and
+CI/CD. It is an extension of open-source work, not a claim of original upstream authorship.
 
-**Current budget: ₹0.** `CLOUD_DEPLOYMENT_ENABLED` remains disabled. GKE's free allowance does not cover the application's compute, so the original architecture cannot be promised free. [Google's GKE pricing](https://cloud.google.com/kubernetes-engine/pricing) is the authority for current charges.
+The ledger guard targets local routing number `883745000`. Late-arriving data,
+unbounded retention, scaling, and production recovery remain documented limits.
+An upstream OpenTelemetry advisory remains constrained by Google ADK; remote
+trace propagation is disabled and regression-tested as mitigation. See
+[dependency review](docs/DEPENDENCY_REVIEW.md).
 
-Follow [DEPLOYMENT_READINESS.md](docs/DEPLOYMENT_READINESS.md) and [CI_CD.md](docs/CI_CD.md) for configuration, rollout order, verification, and rollback. A real application link belongs here only after that deployed revision has been tested.
-
-## Remaining engineering boundaries
-
-- A limited live Gemini workflow has been exercised with synthetic data. Fraud precision/recall, production throughput, full GKE operation, and recovery under production load have not been measured.
-- Delivery is at least once, with the late-arrival, retention, and scaling limits described above.
-- The ledger trigger targets local routing number `883745000`; it does not reverse settled transfers or disable login.
-- Google ADK constrains one upstream OpenTelemetry dependency below its patched release. Incoming trace propagation is forcibly disabled and regression-tested as mitigation; the dependency advisory itself is not fixed. See [DEPENDENCY_REVIEW.md](docs/DEPENDENCY_REVIEW.md).
-- This is a synthetic-data portfolio application, not a certified banking or fraud-prevention system.
-
-## Why this project is relevant to a Python / AI operations role
-
-It connects Python application development with REST and A2A service integration, SQL/database contracts, automation, debugging, AI-output validation, container packaging, Git, technical documentation, and CI/CD. The contribution record describes concrete extensions rather than claiming the upstream product as entirely new work.
-
-## Attribution and licensing
-
-Built on [Vigil by ayanliger and its contributors](https://github.com/ayanliger/gke-turns10-hackathon-vigil) and Google's [Bank of Anthos](https://github.com/GoogleCloudPlatform/bank-of-anthos). Upstream hackathon participation, recognition, and deployments belong to their original authors.
-
-The repository includes an [MIT license](LICENSE); individual files and the banking submodule retain their own notices. [PUBLICATION.md](PUBLICATION.md) explains the credential-sanitized public history. [PORTFOLIO.md](PORTFOLIO.md) records the engineering work in this extension.
+Built on [Vigil and its contributors](https://github.com/ayanliger/gke-turns10-hackathon-vigil)
+and [Google Bank of Anthos](https://github.com/GoogleCloudPlatform/bank-of-anthos).
+Upstream hackathon participation and recognition belong to their original authors.
+The [MIT license](LICENSE), individual file/submodule notices, and
+[publication record](PUBLICATION.md) retain provenance.
